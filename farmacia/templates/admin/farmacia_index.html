@@ -1,0 +1,140 @@
+{% extends "admin/index.html" %}
+{% load i18n %}
+
+{% block content %}
+    <section class="panel resumen-panel" aria-labelledby="titulo-resumen">
+        <h2 id="titulo-resumen">Resumen de inventario</h2>
+        <div class="resumen-tarjetas">
+            <a class="tarjeta" href="{{ resumen_farmacia.enlaces.medicamentos }}">
+                <span class="tarjeta-numero">{{ resumen_farmacia.medicamentos_activos }}</span>
+                <span class="tarjeta-etiqueta">Medicamentos activos</span>
+            </a>
+            <a class="tarjeta alerta" href="{{ resumen_farmacia.enlaces.medicamentos }}?stock=bajo">
+                <span class="tarjeta-numero">{{ resumen_farmacia.stock_bajo }}</span>
+                <span class="tarjeta-etiqueta">En stock mínimo o bajo</span>
+            </a>
+            <a class="tarjeta alerta" href="{{ resumen_farmacia.enlaces.ingresos }}?vencimiento=vencido">
+                <span class="tarjeta-numero">{{ resumen_farmacia.vencidos }}</span>
+                <span class="tarjeta-etiqueta">Lotes vencidos con stock</span>
+            </a>
+            <a class="tarjeta advertencia" href="{{ resumen_farmacia.enlaces.ingresos }}?vencimiento=30">
+                <span class="tarjeta-numero">{{ resumen_farmacia.por_vencer }}</span>
+                <span class="tarjeta-etiqueta">Vencen en los pr&oacute;ximos 30 d&iacute;as</span>
+            </a>
+            <a class="tarjeta" href="{{ resumen_farmacia.enlaces.solicitudes }}">
+                <span class="tarjeta-numero">{{ resumen_farmacia.quimicos_pendientes }}</span>
+                <span class="tarjeta-etiqueta">Solicitudes de qu&iacute;micos pendientes</span>
+            </a>
+        </div>
+    </section>
+
+    <section class="panel accesos-panel" aria-labelledby="titulo-accesos">
+        <h2 id="titulo-accesos">Accesos r&aacute;pidos</h2>
+        <div class="accesos-rapidos">
+            <a class="acceso" href="{{ resumen_farmacia.enlaces.ingresos }}">Registrar o revisar ingresos</a>
+            <a class="acceso" href="{{ resumen_farmacia.enlaces.mermas }}">Registrar o revisar mermas</a>
+            <a class="acceso" href="{{ resumen_farmacia.enlaces.medicamentos }}">Administrar cat&aacute;logo y stock m&iacute;nimo</a>
+            <a class="acceso" href="{{ resumen_farmacia.enlaces.solicitudes }}">Revisar solicitudes de qu&iacute;micos</a>
+        </div>
+        <p class="nota-inventario">
+            Los ingresos y las mermas quedan como registros de control. Para mantener la trazabilidad,
+            no se pueden modificar ni eliminar despu&eacute;s de guardarlos.
+        </p>
+    </section>
+
+    {{ block.super }}
+{% endblock %}
+
+{% block extrastyle %}
+    {{ block.super }}
+    <style>
+        .resumen-panel,
+        .accesos-panel {
+            margin: 0 0 24px;
+            padding: 20px;
+            border: 1px solid var(--hairline-color, #d8d8d8);
+            border-radius: 8px;
+            background: var(--body-bg, #fff);
+        }
+
+        .resumen-panel h2,
+        .accesos-panel h2 {
+            margin: 0 0 16px;
+            color: var(--body-fg, #18332b);
+            font-size: 1.15rem;
+        }
+
+        .resumen-tarjetas {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
+            gap: 12px;
+        }
+
+        .tarjeta {
+            display: flex;
+            min-height: 100px;
+            flex-direction: column;
+            justify-content: center;
+            gap: 8px;
+            padding: 16px;
+            border: 1px solid #dce7e1;
+            border-left: 4px solid #176b52;
+            border-radius: 6px;
+            color: inherit;
+            background: #f7faf8;
+            text-decoration: none;
+        }
+
+        .tarjeta:hover,
+        .acceso:hover {
+            border-color: #176b52;
+            background: #edf5f0;
+        }
+
+        .tarjeta.alerta {
+            border-left-color: #b42318;
+        }
+
+        .tarjeta.advertencia {
+            border-left-color: #b7791f;
+        }
+
+        .tarjeta-numero {
+            font-size: 1.8rem;
+            font-weight: 700;
+        }
+
+        .tarjeta-etiqueta {
+            color: #52635b;
+            font-size: 0.9rem;
+        }
+
+        .accesos-rapidos {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .acceso {
+            padding: 10px 14px;
+            border: 1px solid #b8cec1;
+            border-radius: 6px;
+            color: #145c45;
+            font-weight: 600;
+            text-decoration: none;
+        }
+
+        .nota-inventario {
+            margin: 16px 0 0;
+            color: #52635b;
+            font-size: 0.9rem;
+        }
+
+        @media (max-width: 600px) {
+            .resumen-panel,
+            .accesos-panel {
+                padding: 14px;
+            }
+        }
+    </style>
+{% endblock %}

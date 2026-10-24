@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Iniciar sesi&oacute;n | FarmaSistem</title>
+    <style>
+        :root {
+            font-family: Arial, sans-serif;
+            color: #18332b;
+            background: #f4f8f6;
+        }
+
+        body {
+            display: grid;
+            min-height: 100vh;
+            margin: 0;
+            place-items: center;
+        }
+
+        main {
+            width: min(100% - 2rem, 900px);
+            padding: 2rem;
+            border: 1px solid #dce7e1;
+            border-radius: 8px;
+            background: #fff;
+            box-sizing: border-box;
+        }
+
+        h1,
+        h2 {
+            margin-top: 0;
+        }
+
+        .formularios {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 2rem;
+        }
+
+        .panel {
+            min-width: 0;
+        }
+
+        label {
+            display: block;
+            margin: 1rem 0 0.4rem;
+            font-weight: 700;
+        }
+
+        input {
+            width: 100%;
+            min-height: 2.75rem;
+            padding: 0.6rem;
+            border: 1px solid #9eb7aa;
+            border-radius: 6px;
+            box-sizing: border-box;
+            font: inherit;
+        }
+
+        button {
+            width: 100%;
+            min-height: 2.75rem;
+            margin-top: 1.25rem;
+            border: 0;
+            border-radius: 6px;
+            color: #fff;
+            background: #176b52;
+            font: inherit;
+            font-weight: 700;
+            cursor: pointer;
+        }
+
+        .errorlist,
+        .error {
+            color: #a12727;
+        }
+
+        .mensaje {
+            padding: 0.8rem;
+            border-radius: 6px;
+            background: #eaf4ef;
+        }
+
+        .volver {
+            display: inline-block;
+            margin-top: 1rem;
+            color: #176b52;
+        }
+    </style>
+</head>
+<body>
+    <main>
+        <h1>FarmaSistem</h1>
+        {% for message in messages %}
+            <p class="mensaje" role="status">{{ message }}</p>
+        {% endfor %}
+        <div class="formularios">
+            <section class="panel" aria-labelledby="titulo-login">
+                <h2 id="titulo-login">Iniciar sesi&oacute;n</h2>
+                {% if form.errors %}
+                    <p class="error" role="alert">
+                        El usuario o la contrase&ntilde;a no son correctos, o la cuenta
+                        todav&iacute;a no ha sido aprobada.
+                    </p>
+                {% endif %}
+                <form method="post" action="{% url 'login' %}">
+                    {% csrf_token %}
+                    <input type="hidden" name="next" value="{{ next }}">
+                    <label for="{{ form.username.id_for_label }}">Usuario</label>
+                    {{ form.username }}
+                    <label for="{{ form.password.id_for_label }}">Contrase&ntilde;a</label>
+                    {{ form.password }}
+                    <button type="submit">Entrar</button>
+                </form>
+            </section>
+            <section class="panel" aria-labelledby="titulo-registro">
+                <h2 id="titulo-registro">Registrarse</h2>
+                <p>Las cuentas nuevas necesitan aprobaci&oacute;n del administrador.</p>
+                <form method="post" action="{% url 'registro' %}">
+                    {% csrf_token %}
+                    {% for field in registro_form %}
+                        <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+                        {{ field }}
+                        {% if field.help_text %}
+                            <small>{{ field.help_text|safe }}</small>
+                        {% endif %}
+                        {% for error in field.errors %}
+                            <p class="error" role="alert">{{ error }}</p>
+                        {% endfor %}
+                    {% endfor %}
+                    {% for error in registro_form.non_field_errors %}
+                        <p class="error" role="alert">{{ error }}</p>
+                    {% endfor %}
+                    <button type="submit">Enviar solicitud</button>
+                </form>
+            </section>
+        </div>
+        <a class="volver" href="{% url 'catalogo' %}">Volver al cat&aacute;logo</a>
+    </main>
+</body>
+</html>

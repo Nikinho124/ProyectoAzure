@@ -1,11 +1,17 @@
 import re
 
 from django.conf import settings
-from django.core.exceptions import ValidationError
+from django.contrib.auth.models import Group
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.validators import MinValueValidator
-from django.db import models
-from django.db.models import Q
+from django.db import models, transaction
+from django.db.models import Q, Sum
 from django.utils import timezone
+
+
+GRUPO_FARMACEUTICO = "Auditor_QF"
+GRUPO_CLIENTE = "Cliente"
+GRUPO_JEFE_FARMACIA = "Jefe de Farmacia"
 
 
 def validar_rut_chileno(value):
@@ -189,7 +195,9 @@ class AutorizacionExcepcional(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
         related_name="autorizaciones_excepcionales_recetas",
-        limit_choices_to={"groups__name": "Jefe de Farmacia"},
+        limit_choices_to=(
+            Q(groups__name=GRUPO_JEFE_FARMACIA) | Q(is_superuser=True)
+        ),
         null=True,
         blank=True,
         verbose_name="Jefe de Farmacia que resuelve",
@@ -233,9 +241,10 @@ class AutorizacionExcepcional(models.Model):
             errores["solicitada_por"] = (
                 "El usuario solicitante debe pertenecer al grupo Auditor_QF."
             )
-        if self.jefe_farmacia_id and not self.jefe_farmacia.groups.filter(
-            name="Jefe de Farmacia"
-        ).exists():
+        if self.jefe_farmacia_id and not (
+            self.jefe_farmacia.is_superuser
+            or self.jefe_farmacia.groups.filter(name=GRUPO_JEFE_FARMACIA).exists()
+        ):
             errores["jefe_farmacia"] = (
                 "El usuario debe pertenecer al grupo Jefe de Farmacia."
             )
@@ -252,3 +261,243 @@ class AutorizacionExcepcional(models.Model):
 
     def __str__(self):
         return f"Excepción #{self.pk} - venta #{self.venta_id} ({self.get_estado_display()})"
+
+
+class SolicitudCuenta(models.Model):
+    class RolSolicitado(models.TextChoices):
+        FARMACEUTICO = "farmaceutico", "Químico en farmacia"
+        CLIENTE = "cliente", "Cliente"
+
+    class Estado(models.TextChoices):
+        PENDIENTE = "pendiente", "Pendiente"
+        APROBADA = "aprobada", "Aprobada"
+        RECHAZADA = "rechazada", "Rechazada"
+
+    usuario = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="solicitud_cuenta",
+        verbose_name="Usuario",
+    )
+    rol_solicitado = models.CharField(
+        "Rol solicitado",
+        max_length=20,
+        choices=RolSolicitado.choices,
+    )
+    estado = models.CharField(
+        "Estado",
+        max_length=10,
+        choices=Estado.choices,
+        default=Estado.PENDIENTE,
+    )
+    fecha_solicitud = models.DateTimeField("Fecha de solicitud", auto_now_add=True)
+    revisada_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="solicitudes_cuenta_revisadas",
+        verbose_name="Revisada por",
+        null=True,
+        blank=True,
+    )
+    fecha_revision = models.DateTimeField(
+        "Fecha de revisión",
+        null=True,
+        blank=True,
+    )
+
+    class Meta:
+        verbose_name = "solicitud de cuenta"
+        verbose_name_plural = "solicitudes de cuentas"
+        ordering = ("fecha_solicitud",)
+
+    def aprobar(self, revisor):
+        if not revisor.is_superuser:
+            raise PermissionDenied("Solo el administrador principal puede aprobar cuentas.")
+        if self.estado != self.Estado.PENDIENTE:
+            raise ValidationError("Solo se pueden aprobar solicitudes pendientes.")
+
+        grupos_por_rol = {
+            self.RolSolicitado.FARMACEUTICO: GRUPO_FARMACEUTICO,
+            self.RolSolicitado.CLIENTE: GRUPO_CLIENTE,
+        }
+        nombre_grupo = grupos_por_rol.get(self.rol_solicitado)
+        if nombre_grupo is None:
+            raise ValidationError("El rol solicitado no es válido.")
+
+        with transaction.atomic():
+            grupo, _ = Group.objects.get_or_create(name=nombre_grupo)
+            self.usuario.groups.add(grupo)
+            self.usuario.is_active = True
+            self.usuario.save(update_fields=("is_active",))
+            self.estado = self.Estado.APROBADA
+            self.revisada_por = revisor
+            self.fecha_revision = timezone.now()
+            self.save(
+                update_fields=("estado", "revisada_por", "fecha_revision")
+            )
+
+    def rechazar(self, revisor):
+        if not revisor.is_superuser:
+            raise PermissionDenied("Solo el administrador principal puede rechazar cuentas.")
+        if self.estado != self.Estado.PENDIENTE:
+            raise ValidationError("Solo se pueden rechazar solicitudes pendientes.")
+
+        with transaction.atomic():
+            self.usuario.is_active = False
+            self.usuario.save(update_fields=("is_active",))
+            self.estado = self.Estado.RECHAZADA
+            self.revisada_por = revisor
+            self.fecha_revision = timezone.now()
+            self.save(update_fields=("estado", "revisada_por", "fecha_revision"))
+
+    def __str__(self):
+        return f"{self.usuario} — {self.get_rol_solicitado_display()} ({self.get_estado_display()})"
+
+
+class Medicamento(models.Model):
+    codigo = models.CharField("Código de producto", max_length=50, unique=True)
+    nombre = models.CharField("Nombre del medicamento", max_length=200)
+    descripcion = models.TextField("Descripción", blank=True)
+    stock_minimo = models.PositiveIntegerField(
+        "Stock mínimo",
+        default=5,
+        help_text="Se mostrará una alerta cuando el stock disponible llegue a este valor.",
+    )
+    activo = models.BooleanField("Activo en el catálogo", default=True)
+
+    class Meta:
+        verbose_name = "medicamento"
+        verbose_name_plural = "medicamentos"
+        ordering = ("nombre",)
+        constraints = [
+            models.CheckConstraint(
+                check=Q(stock_minimo__gte=0),
+                name="medicamento_stock_minimo_no_negativo",
+            ),
+        ]
+
+    @property
+    def stock_actual(self):
+        ingresado = self.ingresos.aggregate(total=Sum("cantidad"))["total"] or 0
+        mermado = Merma.objects.filter(ingreso__medicamento=self).aggregate(
+            total=Sum("cantidad")
+        )["total"] or 0
+        return ingresado - mermado
+
+    def __str__(self):
+        return f"{self.nombre} ({self.codigo})"
+
+
+class IngresoInventario(models.Model):
+    medicamento = models.ForeignKey(
+        Medicamento,
+        on_delete=models.PROTECT,
+        related_name="ingresos",
+        verbose_name="Medicamento",
+    )
+    lote = models.CharField("Número de lote", max_length=100)
+    cantidad = models.PositiveIntegerField(
+        "Cantidad recibida",
+        validators=[MinValueValidator(1)],
+    )
+    fecha_vencimiento = models.DateField("Fecha de vencimiento")
+    proveedor = models.CharField("Proveedor", max_length=200, blank=True)
+    fecha_ingreso = models.DateTimeField("Fecha de ingreso", auto_now_add=True)
+    registrado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="ingresos_inventario_registrados",
+        verbose_name="Registrado por",
+    )
+
+    class Meta:
+        verbose_name = "ingreso de inventario"
+        verbose_name_plural = "ingresos de inventario"
+        ordering = ("fecha_vencimiento", "medicamento__nombre")
+        constraints = [
+            models.CheckConstraint(
+                check=Q(cantidad__gt=0),
+                name="ingreso_inventario_cantidad_positiva",
+            ),
+        ]
+
+    @property
+    def mermas_totales(self):
+        return self.mermas.aggregate(total=Sum("cantidad"))["total"] or 0
+
+    @property
+    def stock_disponible(self):
+        return self.cantidad - self.mermas_totales
+
+    def __str__(self):
+        return f"{self.medicamento} — Lote {self.lote}"
+
+
+class Merma(models.Model):
+    class Motivo(models.TextChoices):
+        VENCIDO = "vencido", "Producto vencido"
+        DANADO = "danado", "Producto dañado"
+        PERDIDA = "perdida", "Pérdida o extravío"
+        OTRO = "otro", "Otro"
+
+    ingreso = models.ForeignKey(
+        IngresoInventario,
+        on_delete=models.PROTECT,
+        related_name="mermas",
+        verbose_name="Lote de inventario",
+    )
+    cantidad = models.PositiveIntegerField(
+        "Cantidad mermada",
+        validators=[MinValueValidator(1)],
+    )
+    motivo = models.CharField("Motivo", max_length=12, choices=Motivo.choices)
+    observacion = models.TextField("Observación", blank=True)
+    fecha_registro = models.DateTimeField("Fecha de registro", auto_now_add=True)
+    registrado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="mermas_inventario_registradas",
+        verbose_name="Registrado por",
+    )
+
+    class Meta:
+        verbose_name = "merma"
+        verbose_name_plural = "mermas"
+        ordering = ("-fecha_registro",)
+        constraints = [
+            models.CheckConstraint(
+                check=Q(cantidad__gt=0),
+                name="merma_cantidad_positiva",
+            ),
+        ]
+
+    def clean(self):
+        super().clean()
+        if not self.ingreso_id or not self.cantidad:
+            return
+
+        otras_mermas = Merma.objects.filter(ingreso_id=self.ingreso_id)
+        if self.pk:
+            otras_mermas = otras_mermas.exclude(pk=self.pk)
+        cantidad_ya_mermada = otras_mermas.aggregate(total=Sum("cantidad"))[
+            "total"
+        ] or 0
+        disponible = self.ingreso.cantidad - cantidad_ya_mermada
+        if self.cantidad > disponible:
+            raise ValidationError(
+                {
+                    "cantidad": (
+                        f"La cantidad supera el stock disponible del lote "
+                        f"({disponible} unidades)."
+                    )
+                }
+            )
+
+    def save(self, *args, **kwargs):
+        with transaction.atomic():
+            IngresoInventario.objects.select_for_update().get(pk=self.ingreso_id)
+            self.full_clean()
+            super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"Merma de {self.cantidad} unidades — {self.ingreso}"
