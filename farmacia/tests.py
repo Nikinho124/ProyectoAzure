@@ -224,6 +224,7 @@ class RegistroUsuarioTests(TestCase):
         respuesta = self.client.get(reverse("admin:index"))
 
         self.assertEqual(respuesta.status_code, 200)
+        self.assertContains(respuesta, "farmacia/admin.css")
         self.assertContains(respuesta, "Resumen de inventario")
         self.assertContains(respuesta, "Registrar o revisar ingresos")
         self.assertContains(respuesta, "Solicitudes de qu")
