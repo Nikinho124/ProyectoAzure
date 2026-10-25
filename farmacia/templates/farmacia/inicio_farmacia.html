@@ -1,0 +1,198 @@
+{% extends "farmacia/base_personal.html" %}
+{% load farmacia_formatos %}
+
+{% block title %}Inicio de farmacia{% endblock %}
+
+{% block extra_style %}
+    <style>
+        .estadisticas {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .estadistica {
+            padding: 1rem 1.15rem;
+            border: 1px solid #d9e6de;
+            border-radius: 9px;
+            background: #fff;
+        }
+
+        .estadistica strong {
+            display: block;
+            margin-bottom: 0.35rem;
+            color: #17573e;
+            font-size: 1.8rem;
+        }
+
+        .estadistica span {
+            color: #4d6155;
+        }
+
+        .seccion-titulo {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+            margin: 0 0 1rem;
+        }
+
+        .seccion-titulo h2 {
+            margin: 0;
+            color: #183b2e;
+            font-size: 1.25rem;
+        }
+
+        .productos {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(235px, 1fr));
+            gap: 1rem;
+        }
+
+        .producto {
+            display: flex;
+            min-height: 210px;
+            flex-direction: column;
+            padding: 1.2rem;
+            border: 1px solid #dce7e0;
+            border-radius: 10px;
+            background: #fff;
+            box-shadow: 0 4px 14px rgb(29 61 45 / 5%);
+        }
+
+        .producto-codigo {
+            margin: 0 0 0.5rem;
+            color: #52665a;
+            font-size: 0.82rem;
+            font-weight: 700;
+            letter-spacing: 0.035em;
+        }
+
+        .producto h3 {
+            margin: 0 0 0.5rem;
+            color: #1c3529;
+            font-size: 1.1rem;
+        }
+
+        .producto-descripcion {
+            margin: 0 0 1rem;
+            color: #4d6155;
+            line-height: 1.45;
+        }
+
+        .producto-pie {
+            display: flex;
+            align-items: flex-end;
+            justify-content: space-between;
+            gap: 0.6rem;
+            margin-top: auto;
+            padding-top: 0.9rem;
+            border-top: 1px solid #e8eee9;
+        }
+
+        .precio {
+            color: #145c45;
+            font-size: 1.2rem;
+            font-weight: 700;
+        }
+
+        .sin-precio {
+            color: #6b4d12;
+            font-size: 0.88rem;
+            font-weight: 600;
+        }
+
+        .existencias {
+            color: #42574a;
+            font-size: 0.84rem;
+        }
+
+        .condicion-receta {
+            display: inline-block;
+            width: fit-content;
+            margin: 0 0 0.8rem;
+            padding: 0.3rem 0.55rem;
+            border-radius: 999px;
+            color: #6b4d12;
+            background: #fff3d6;
+            font-size: 0.78rem;
+            font-weight: 700;
+        }
+
+        .condicion-receta.sin-receta {
+            color: #24533b;
+            background: #e7f4eb;
+        }
+
+        .vacio {
+            padding: 2rem;
+            text-align: center;
+            color: #42574a;
+        }
+    </style>
+{% endblock %}
+
+{% block content %}
+    <section class="titulo-pagina">
+        <div>
+            <h1>Inicio de farmacia</h1>
+            <p>Consulta los medicamentos activos, precios y existencias disponibles.</p>
+        </div>
+        <a class="boton-principal" href="{% url 'farmacia:caja' %}">Ir a Caja</a>
+    </section>
+
+    <section class="estadisticas" aria-label="Resumen de productos">
+        <div class="estadistica">
+            <strong>{{ total_medicamentos }}</strong>
+            <span>Productos activos en el catálogo</span>
+        </div>
+        <div class="estadistica">
+            <strong>{{ total_disponibles }}</strong>
+            <span>Productos visibles para venta</span>
+        </div>
+    </section>
+
+    <section aria-labelledby="titulo-productos">
+        <div class="seccion-titulo">
+            <h2 id="titulo-productos">Cat&aacute;logo de farmacia</h2>
+            <a class="boton-secundario" href="{% url 'farmacia:caja' %}">Abrir caja</a>
+        </div>
+        <div class="productos">
+            {% for medicamento in medicamentos %}
+                <article class="producto">
+                    <p class="producto-codigo">{{ medicamento.codigo }}</p>
+                    <h3>{{ medicamento.nombre }}</h3>
+                    {% if medicamento.requiere_receta %}
+                        <span class="condicion-receta">Con receta</span>
+                    {% else %}
+                        <span class="condicion-receta sin-receta">Sin receta</span>
+                    {% endif %}
+                    {% if medicamento.descripcion %}
+                        <p class="producto-descripcion">{{ medicamento.descripcion }}</p>
+                    {% endif %}
+                    <div class="producto-pie">
+                        <div>
+                            {% if medicamento.precio is not None %}
+                                <span class="precio">{{ medicamento.precio|moneda_chilena }}</span>
+                            {% else %}
+                                <span class="sin-precio">Precio por configurar</span>
+                            {% endif %}
+                            <div class="existencias">
+                                Existencias: {{ medicamento.stock_vendible }}
+                            </div>
+                        </div>
+                        <a class="boton-secundario" href="{% url 'farmacia:caja' %}?q={{ medicamento.codigo|urlencode }}">
+                            Vender
+                        </a>
+                    </div>
+                </article>
+            {% empty %}
+                <div class="panel vacio">
+                    A&uacute;n no hay medicamentos activos. Cuando se agreguen desde el panel,
+                    aparecer&aacute;n aqu&iacute; con su precio y disponibilidad.
+                </div>
+            {% endfor %}
+        </div>
+    </section>
+{% endblock %}

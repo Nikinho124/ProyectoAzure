@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+{% load static %}
+<html lang="es">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}Farmacia{% endblock %} | FarmaSistem</title>
+    <link rel="stylesheet" href="{% static 'farmacia/sitio.css' %}?v=1">
+    <style>
+        :root {
+            font-family: Arial, sans-serif;
+            color: #1d3027;
+            background: #f3f7f4;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            min-height: 100vh;
+            margin: 0;
+        }
+
+        .barra {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+            padding: 1rem max(1.25rem, calc((100% - 1180px) / 2));
+            color: #fff;
+            background: #123f33;
+            box-shadow: 0 3px 14px rgb(18 63 51 / 18%);
+        }
+
+        .marca {
+            color: #fff;
+            font-size: 1.2rem;
+            font-weight: 700;
+            text-decoration: none;
+        }
+
+        .nav-personal,
+        .nav-enlaces {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .nav-enlaces a {
+            padding: 0.55rem 0.75rem;
+            border-radius: 6px;
+            color: #e8f2ec;
+            font-weight: 600;
+            text-decoration: none;
+        }
+
+        .nav-enlaces a:hover,
+        .nav-enlaces a[aria-current="page"] {
+            color: #fff;
+            background: #245a48;
+        }
+
+        .saludo {
+            color: #e1ede6;
+            font-size: 0.92rem;
+        }
+
+        .salir {
+            padding: 0.55rem 0.8rem;
+            border: 1px solid #a8c7b7;
+            border-radius: 6px;
+            color: #fff;
+            background: transparent;
+            font: inherit;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .salir:hover {
+            background: #245a48;
+        }
+
+        main {
+            width: min(1180px, 100% - 2rem);
+            margin: 2rem auto 4rem;
+        }
+
+        .titulo-pagina {
+            display: flex;
+            align-items: flex-end;
+            justify-content: space-between;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .titulo-pagina h1 {
+            margin: 0 0 0.4rem;
+            color: #183b2e;
+            font-size: clamp(1.7rem, 4vw, 2.3rem);
+        }
+
+        .titulo-pagina p {
+            margin: 0;
+            color: #4d6155;
+        }
+
+        .boton-principal,
+        .boton-secundario {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 42px;
+            padding: 0.65rem 1rem;
+            border: 1px solid #176b52;
+            border-radius: 7px;
+            color: #fff;
+            background: #176b52;
+            font: inherit;
+            font-weight: 700;
+            text-decoration: none;
+            cursor: pointer;
+        }
+
+        .boton-principal:hover {
+            background: #104d3b;
+        }
+
+        .boton-secundario {
+            color: #145c45;
+            background: #fff;
+        }
+
+        .boton-secundario:hover {
+            background: #eaf4ef;
+        }
+
+        .mensaje {
+            margin-bottom: 1rem;
+            padding: 0.85rem 1rem;
+            border: 1px solid #b7d8c5;
+            border-radius: 7px;
+            color: #174a32;
+            background: #e9f6ee;
+        }
+
+        .mensaje.error {
+            border-color: #e3b5b5;
+            color: #782c2c;
+            background: #fff0f0;
+        }
+
+        .mensaje.warning {
+            border-color: #e4d09c;
+            color: #674d16;
+            background: #fff8e5;
+        }
+
+        .panel {
+            padding: 1.25rem;
+            border: 1px solid #dce7e0;
+            border-radius: 10px;
+            background: #fff;
+            box-shadow: 0 4px 14px rgb(29 61 45 / 5%);
+        }
+
+        @media (max-width: 760px) {
+            .barra {
+                align-items: flex-start;
+                flex-wrap: wrap;
+                padding: 1rem;
+            }
+
+            .nav-personal {
+                width: 100%;
+                justify-content: space-between;
+            }
+
+            main {
+                margin-top: 1.5rem;
+            }
+
+            .titulo-pagina {
+                align-items: flex-start;
+                flex-direction: column;
+            }
+        }
+    </style>
+    {% block extra_style %}{% endblock %}
+</head>
+<body>
+    <header class="barra">
+        <a class="marca" href="{% url 'farmacia:inicio' %}">FarmaSistem</a>
+        <nav class="nav-enlaces" aria-label="Navegaci&oacute;n principal">
+            <a href="{% url 'farmacia:inicio' %}" {% if request.resolver_match.url_name == "inicio" %}aria-current="page"{% endif %}>
+                Inicio farmacia
+            </a>
+            <a href="{% url 'farmacia:caja' %}" {% if request.resolver_match.url_name == "caja" %}aria-current="page"{% endif %}>
+                Caja
+            </a>
+        </nav>
+        <div class="nav-personal">
+            <span class="saludo">Hola, {{ request.user.get_username }}</span>
+            <form method="post" action="{% url 'logout' %}">
+                {% csrf_token %}
+                <button class="salir" type="submit">Cerrar sesi&oacute;n</button>
+            </form>
+        </div>
+    </header>
+    <main>
+        {% for message in messages %}
+            <div class="mensaje {{ message.tags }}" role="status">{{ message }}</div>
+        {% endfor %}
+        {% block content %}{% endblock %}
+    </main>
+    {% include "farmacia/includes/pie_pagina.html" %}
+</body>
+</html>

@@ -1,9 +1,11 @@
+{% load static %}
 <!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Iniciar sesi&oacute;n | FarmaSistem</title>
+    <link rel="stylesheet" href="{% static 'farmacia/sitio.css' %}?v=1">
     <style>
         :root {
             font-family: Arial, sans-serif;
@@ -12,14 +14,16 @@
         }
 
         body {
-            display: grid;
+            display: flex;
             min-height: 100vh;
+            flex-direction: column;
             margin: 0;
-            place-items: center;
+            align-items: center;
         }
 
         main {
             width: min(100% - 2rem, 900px);
+            margin: auto;
             padding: 2rem;
             border: 1px solid #dce7e1;
             border-radius: 8px;
@@ -138,5 +142,6 @@
         </div>
         <a class="volver" href="{% url 'catalogo' %}">Volver al cat&aacute;logo</a>
     </main>
+    {% include "farmacia/includes/pie_pagina.html" %}
 </body>
 </html>

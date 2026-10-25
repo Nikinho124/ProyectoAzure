@@ -1,9 +1,11 @@
+{% load static %}
 <!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Cat&aacute;logo | FarmaSistem</title>
+    <link rel="stylesheet" href="{% static 'farmacia/sitio.css' %}?v=1">
     <style>
         :root {
             color-scheme: light;
@@ -13,6 +15,9 @@
         }
 
         body {
+            display: flex;
+            min-height: 100vh;
+            flex-direction: column;
             margin: 0;
         }
 
@@ -40,6 +45,8 @@
         }
 
         main {
+            flex: 1;
+            width: min(960px, 100%);
             max-width: 960px;
             margin: 2rem auto;
             padding: 0 1.5rem;
@@ -207,5 +214,6 @@
             {% endfor %}
         </section>
     </main>
+    {% include "farmacia/includes/pie_pagina.html" %}
 </body>
 </html>

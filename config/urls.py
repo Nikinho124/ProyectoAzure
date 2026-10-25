@@ -15,7 +15,7 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 from django.contrib.auth import views as auth_views
-from django.urls import path
+from django.urls import include, path
 
 from farmacia.admin import farmacia_admin_site
 from farmacia.views import IniciarSesionView, catalogo, registrar_usuario
@@ -33,5 +33,6 @@ urlpatterns = [
         auth_views.LogoutView.as_view(),
         name='logout',
     ),
+    path('farmacia/', include('farmacia.urls')),
     path('admin/', farmacia_admin_site.urls),
 ]

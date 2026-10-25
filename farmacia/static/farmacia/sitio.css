@@ -1,0 +1,49 @@
+.pie-sitio {
+    margin-top: auto;
+    color: #e8f0eb;
+    background: #123f33;
+}
+
+.pie-contenido {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 2rem;
+    width: min(1180px, 100% - 2rem);
+    margin: 0 auto;
+    padding: 2rem 0;
+}
+
+.pie-bloque h2 {
+    margin: 0 0 0.8rem;
+    color: #fff;
+    font-size: 1rem;
+}
+
+.pie-bloque p {
+    margin: 0.4rem 0;
+    color: #e0ebe4;
+    font-size: 0.9rem;
+    line-height: 1.5;
+}
+
+.pie-final {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.9rem max(1rem, calc((100% - 1180px) / 2));
+    border-top: 1px solid #376354;
+    color: #e0ebe4;
+    font-size: 0.82rem;
+}
+
+@media (max-width: 600px) {
+    .pie-contenido {
+        gap: 1.25rem;
+        padding: 1.5rem 0;
+    }
+
+    .pie-final {
+        flex-direction: column;
+        gap: 0.35rem;
+    }
+}

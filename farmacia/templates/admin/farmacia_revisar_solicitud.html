@@ -1,0 +1,67 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block content %}
+    <div class="solicitud-revision">
+        <section class="solicitud-detalle">
+            <p class="solicitud-etiqueta">Solicitud de acceso profesional</p>
+            <h1>{{ solicitud.usuario.get_full_name|default:solicitud.usuario.get_username }}</h1>
+            <dl>
+                <div>
+                    <dt>Nombre de usuario</dt>
+                    <dd>{{ solicitud.usuario.get_username }}</dd>
+                </div>
+                <div>
+                    <dt>Correo electr&oacute;nico</dt>
+                    <dd>{{ solicitud.usuario.email|default:"No informado" }}</dd>
+                </div>
+                <div>
+                    <dt>Tipo de cuenta solicitado</dt>
+                    <dd>{{ solicitud.get_rol_solicitado_display }}</dd>
+                </div>
+                <div>
+                    <dt>Fecha de solicitud</dt>
+                    <dd>{{ solicitud.fecha_solicitud|date:"d/m/Y H:i" }}</dd>
+                </div>
+                <div>
+                    <dt>Estado</dt>
+                    <dd><span class="solicitud-estado">{{ solicitud.get_estado_display }}</span></dd>
+                </div>
+            </dl>
+        </section>
+
+        {% if solicitud.estado == "pendiente" %}
+            <section class="solicitud-decision" aria-labelledby="titulo-decision">
+                <h2 id="titulo-decision">Decisi&oacute;n del administrador</h2>
+                <p>
+                    Al aprobar, la cuenta quedar&aacute; activa y podr&aacute; iniciar sesi&oacute;n
+                    como qu&iacute;mico en farmacia. Si la rechazas, no podr&aacute; acceder.
+                </p>
+                <div class="solicitud-botones">
+                    <form method="post" action="{% url 'admin:farmacia_solicitudcuenta_resolver' solicitud.pk %}">
+                        {% csrf_token %}
+                        <input type="hidden" name="decision" value="aprobar">
+                        <button class="solicitud-boton aprobar" type="submit">
+                            Aprobar y activar cuenta
+                        </button>
+                    </form>
+                    <form method="post" action="{% url 'admin:farmacia_solicitudcuenta_resolver' solicitud.pk %}">
+                        {% csrf_token %}
+                        <input type="hidden" name="decision" value="rechazar">
+                        <button class="solicitud-boton rechazar" type="submit">
+                            Rechazar solicitud
+                        </button>
+                    </form>
+                </div>
+            </section>
+        {% else %}
+            <p class="solicitud-finalizada">
+                Esta solicitud ya fue {{ solicitud.get_estado_display|lower }}.
+            </p>
+        {% endif %}
+
+        <a class="solicitud-volver" href="{{ changelist_url }}">
+            Volver a solicitudes de cuentas
+        </a>
+    </div>
+{% endblock %}

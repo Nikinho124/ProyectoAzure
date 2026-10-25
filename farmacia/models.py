@@ -358,6 +358,19 @@ class Medicamento(models.Model):
     codigo = models.CharField("Código de producto", max_length=50, unique=True)
     nombre = models.CharField("Nombre del medicamento", max_length=200)
     descripcion = models.TextField("Descripción", blank=True)
+    precio = models.DecimalField(
+        "Precio de venta",
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0)],
+    )
+    requiere_receta = models.BooleanField(
+        "Requiere receta",
+        default=False,
+        help_text="Activa esta opción si la dispensación requiere receta médica.",
+    )
     stock_minimo = models.PositiveIntegerField(
         "Stock mínimo",
         default=5,
@@ -374,12 +387,19 @@ class Medicamento(models.Model):
                 check=Q(stock_minimo__gte=0),
                 name="medicamento_stock_minimo_no_negativo",
             ),
+            models.CheckConstraint(
+                check=Q(precio__isnull=True) | Q(precio__gte=0),
+                name="medicamento_precio_no_negativo",
+            ),
         ]
 
     @property
     def stock_actual(self):
-        ingresado = self.ingresos.aggregate(total=Sum("cantidad"))["total"] or 0
-        mermado = Merma.objects.filter(ingreso__medicamento=self).aggregate(
+        lotes_vigentes = self.ingresos.filter(
+            fecha_vencimiento__gte=timezone.localdate()
+        )
+        ingresado = lotes_vigentes.aggregate(total=Sum("cantidad"))["total"] or 0
+        mermado = Merma.objects.filter(ingreso__in=lotes_vigentes).aggregate(
             total=Sum("cantidad")
         )["total"] or 0
         return ingresado - mermado
