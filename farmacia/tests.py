@@ -1,12 +1,15 @@
+from io import BytesIO
 from datetime import date, timedelta
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.test import TestCase
 from django.urls import reverse
+from PIL import Image
 
 from farmacia.models import (
     GRUPO_CLIENTE,
@@ -15,6 +18,9 @@ from farmacia.models import (
     Medicamento,
     Merma,
     SolicitudCuenta,
+    SolicitudRevisionReceta,
+    SimulacionPago,
+    VentaCaja,
 )
 
 User = get_user_model()
@@ -293,12 +299,357 @@ class RegistroUsuarioTests(TestCase):
         respuesta = self.client.get(reverse("farmacia:caja"))
         self.assertContains(respuesta, "Producto para caja")
         self.assertContains(respuesta, "$2.500")
-        self.assertContains(respuesta, "cobro")
+        self.assertContains(respuesta, "Confirmar venta y descontar stock")
         self.assertContains(respuesta, "pie-sitio")
         self.assertEqual(
             self.client.session["farmacia_caja_carrito"],
             {str(medicamento.pk): 2},
         )
+
+    def test_caja_registra_pago_y_descuenta_lotes_por_vencimiento(self):
+        quimico = User.objects.create_user(
+            username="quimico_venta",
+            password="Venta-test-123",
+            is_active=True,
+        )
+        quimico.groups.add(Group.objects.get_or_create(name=GRUPO_FARMACEUTICO)[0])
+        medicamento = Medicamento.objects.create(
+            codigo="MED-VENTA-001",
+            nombre="Medicamento para vender",
+            precio=Decimal("1250.00"),
+        )
+        lote_proximo = IngresoInventario.objects.create(
+            medicamento=medicamento,
+            lote="LOTE-VENTA-PROXIMO",
+            cantidad=2,
+            fecha_vencimiento=date.today() + timedelta(days=30),
+            registrado_por=self.admin,
+        )
+        lote_posterior = IngresoInventario.objects.create(
+            medicamento=medicamento,
+            lote="LOTE-VENTA-POSTERIOR",
+            cantidad=5,
+            fecha_vencimiento=date.today() + timedelta(days=60),
+            registrado_por=self.admin,
+        )
+        self.client.force_login(quimico)
+        self.client.post(
+            reverse("farmacia:caja"),
+            {
+                "accion": "agregar",
+                "medicamento_id": medicamento.pk,
+                "cantidad": "4",
+            },
+        )
+        respuesta = self.client.get(reverse("farmacia:caja"))
+        checkout_key = respuesta.context["checkout_key"]
+
+        respuesta = self.client.post(
+            reverse("farmacia:caja"),
+            {
+                "accion": "confirmar_venta",
+                "checkout_key": checkout_key,
+                "medio_pago": SimulacionPago.MedioPago.DEBITO,
+            },
+        )
+
+        self.assertRedirects(
+            respuesta,
+            reverse("farmacia:caja"),
+            fetch_redirect_response=False,
+        )
+        venta = VentaCaja.objects.get()
+        pago = SimulacionPago.objects.get(venta_caja=venta)
+        self.assertEqual(venta.cajero, quimico)
+        self.assertEqual(venta.total, Decimal("5000.00"))
+        self.assertEqual(pago.estado, SimulacionPago.Estado.APROBADO)
+        self.assertEqual(pago.medio_pago, SimulacionPago.MedioPago.DEBITO)
+        pagos = self.client.get(reverse("farmacia:caja"))
+        self.assertContains(pagos, "Pagos simulados recientes")
+        self.assertContains(pagos, "Débito")
+        self.assertEqual(
+            list(
+                venta.detalles.order_by("ingreso__fecha_vencimiento").values_list(
+                    "ingreso_id",
+                    "cantidad",
+                )
+            ),
+            [(lote_proximo.pk, 2), (lote_posterior.pk, 2)],
+        )
+        lote_proximo.refresh_from_db()
+        lote_posterior.refresh_from_db()
+        self.assertEqual(lote_proximo.stock_disponible, 0)
+        self.assertEqual(lote_posterior.stock_disponible, 3)
+
+        self.client.post(
+            reverse("farmacia:caja"),
+            {
+                "accion": "confirmar_venta",
+                "checkout_key": checkout_key,
+                "medio_pago": SimulacionPago.MedioPago.DEBITO,
+            },
+        )
+        self.assertEqual(VentaCaja.objects.count(), 1)
+        self.assertEqual(SimulacionPago.objects.filter(venta_caja=venta).count(), 1)
+        lote_posterior.refresh_from_db()
+        self.assertEqual(lote_posterior.stock_disponible, 3)
+
+    def test_caja_rechaza_venta_si_el_carrito_supera_stock_actual(self):
+        quimico = User.objects.create_user(
+            username="quimico_stock_venta",
+            password="Venta-test-123",
+            is_active=True,
+        )
+        quimico.groups.add(Group.objects.get_or_create(name=GRUPO_FARMACEUTICO)[0])
+        medicamento = Medicamento.objects.create(
+            codigo="MED-VENTA-002",
+            nombre="Medicamento con stock limitado",
+            precio=Decimal("800.00"),
+        )
+        ingreso = IngresoInventario.objects.create(
+            medicamento=medicamento,
+            lote="LOTE-VENTA-LIMITADO",
+            cantidad=1,
+            fecha_vencimiento=date.today() + timedelta(days=60),
+            registrado_por=self.admin,
+        )
+        self.client.force_login(quimico)
+        respuesta = self.client.get(reverse("farmacia:caja"))
+        checkout_key = respuesta.context["checkout_key"]
+        session = self.client.session
+        session["farmacia_caja_carrito"] = {str(medicamento.pk): 2}
+        session.save()
+
+        respuesta = self.client.post(
+            reverse("farmacia:caja"),
+            {
+                "accion": "confirmar_venta",
+                "checkout_key": checkout_key,
+                "medio_pago": SimulacionPago.MedioPago.EFECTIVO,
+            },
+            follow=True,
+        )
+
+        self.assertContains(respuesta, "Stock insuficiente")
+        self.assertFalse(VentaCaja.objects.exists())
+        self.assertFalse(SimulacionPago.objects.exists())
+        ingreso.refresh_from_db()
+        self.assertEqual(ingreso.stock_disponible, 1)
+
+    def test_caja_no_vende_medicamento_con_receta_sin_validacion(self):
+        quimico = User.objects.create_user(
+            username="quimico_receta_caja",
+            password="Venta-test-123",
+            is_active=True,
+        )
+        quimico.groups.add(Group.objects.get_or_create(name=GRUPO_FARMACEUTICO)[0])
+        medicamento = Medicamento.objects.create(
+            codigo="MED-VENTA-RECETA",
+            nombre="Medicamento con receta",
+            precio=Decimal("1200.00"),
+            requiere_receta=True,
+        )
+        IngresoInventario.objects.create(
+            medicamento=medicamento,
+            lote="LOTE-VENTA-RECETA",
+            cantidad=3,
+            fecha_vencimiento=date.today() + timedelta(days=60),
+            registrado_por=self.admin,
+        )
+        self.client.force_login(quimico)
+
+        respuesta = self.client.post(
+            reverse("farmacia:caja"),
+            {
+                "accion": "agregar",
+                "medicamento_id": medicamento.pk,
+                "cantidad": "1",
+            },
+            follow=True,
+        )
+
+        self.assertContains(respuesta, "requieren el flujo de validación")
+        self.assertEqual(self.client.session.get("farmacia_caja_carrito", {}), {})
+        self.assertFalse(VentaCaja.objects.exists())
+
+    def crear_imagen_receta(self):
+        archivo = BytesIO()
+        Image.new("RGB", (4, 4), color="white").save(archivo, format="PNG")
+        return SimpleUploadedFile(
+            "receta.png",
+            archivo.getvalue(),
+            content_type="image/png",
+        )
+
+    def datos_solicitud_receta(self):
+        return {
+            "cliente_nombre": "Cliente de prueba",
+            "cliente_rut": "11.111.111-1",
+            "medicamento": "Medicamento recetado",
+            "cantidad": "1",
+            "medico_prescriptor": "Dra. Ejemplo",
+            "foto_receta": self.crear_imagen_receta(),
+        }
+
+    def test_visitante_puede_enviar_receta_y_solo_personal_autorizado_verla(self):
+        respuesta = self.client.post(
+            reverse("farmacia:solicitar_receta"),
+            self.datos_solicitud_receta(),
+        )
+
+        self.assertRedirects(
+            respuesta,
+            reverse("farmacia:solicitar_receta"),
+            fetch_redirect_response=False,
+        )
+        solicitud = SolicitudRevisionReceta.objects.get()
+        self.addCleanup(lambda: solicitud.foto_receta.delete(save=False))
+        self.assertIsNone(solicitud.cliente)
+        self.assertEqual(solicitud.estado, SolicitudRevisionReceta.Estado.PENDIENTE)
+        self.assertIn("private_recetas", solicitud.foto_receta.path)
+
+        foto_no_autorizada = self.client.get(
+            reverse("farmacia:foto_receta", args=(solicitud.pk,))
+        )
+        self.assertEqual(foto_no_autorizada.status_code, 302)
+
+        quimico = User.objects.create_user(
+            username="quimico_revision",
+            password="Revision-test-123",
+            is_active=True,
+        )
+        quimico.groups.add(Group.objects.get_or_create(name=GRUPO_FARMACEUTICO)[0])
+        self.client.force_login(quimico)
+
+        bandeja = self.client.get(reverse("farmacia:revisar_recetas"))
+        self.assertContains(bandeja, "Cliente de prueba")
+        self.assertContains(bandeja, "Medicamento recetado")
+        self.assertContains(bandeja, "Aprobar revisión")
+        foto = self.client.get(
+            reverse("farmacia:foto_receta", args=(solicitud.pk,))
+        )
+        self.assertEqual(foto.status_code, 200)
+        self.assertEqual(foto["Content-Type"], "image/png")
+        self.assertEqual(foto["X-Content-Type-Options"], "nosniff")
+        self.assertEqual(foto["Cache-Control"], "private, no-store")
+        foto.close()
+
+        respuesta = self.client.post(
+            reverse("farmacia:resolver_receta", args=(solicitud.pk,)),
+            {"decision": "aprobar", "respuesta": "Receta legible."},
+            follow=True,
+        )
+
+        self.assertContains(respuesta, f"La solicitud #{solicitud.pk} quedó aprobada")
+        solicitud.refresh_from_db()
+        self.assertEqual(solicitud.estado, SolicitudRevisionReceta.Estado.APROBADA)
+        self.assertEqual(solicitud.revisada_por, quimico)
+        self.assertEqual(solicitud.respuesta, "Receta legible.")
+        self.assertIsNotNone(solicitud.fecha_revision)
+        self.assertContains(respuesta, "Solicitudes revisadas")
+
+    def test_cliente_con_cuenta_puede_enviar_receta_asociada_a_su_usuario(self):
+        cliente = User.objects.create_user(
+            username="cliente_receta",
+            password="Cliente-test-123",
+            is_active=True,
+        )
+        cliente.groups.add(Group.objects.get_or_create(name=GRUPO_CLIENTE)[0])
+        self.client.force_login(cliente)
+
+        respuesta = self.client.post(
+            reverse("farmacia:solicitar_receta"),
+            self.datos_solicitud_receta(),
+        )
+
+        self.assertRedirects(
+            respuesta,
+            reverse("farmacia:solicitar_receta"),
+            fetch_redirect_response=False,
+        )
+        solicitud = SolicitudRevisionReceta.objects.get()
+        self.addCleanup(lambda: solicitud.foto_receta.delete(save=False))
+        self.assertEqual(solicitud.cliente, cliente)
+
+    def test_usuario_que_no_es_cliente_no_puede_enviar_solicitud_de_receta(self):
+        usuario = User.objects.create_user(
+            username="usuario_sin_rol",
+            password="Usuario-test-123",
+            is_active=True,
+        )
+        self.client.force_login(usuario)
+
+        respuesta = self.client.get(reverse("farmacia:solicitar_receta"))
+
+        self.assertEqual(respuesta.status_code, 403)
+
+    def test_usuario_no_farmaceutico_no_puede_revisar_solicitudes(self):
+        cliente = User.objects.create_user(
+            username="cliente_sin_revision",
+            password="Cliente-test-123",
+            is_active=True,
+        )
+        cliente.groups.add(Group.objects.get_or_create(name=GRUPO_CLIENTE)[0])
+        self.client.force_login(cliente)
+
+        respuesta = self.client.get(reverse("farmacia:revisar_recetas"))
+
+        self.assertEqual(respuesta.status_code, 403)
+
+    def test_quimico_puede_rechazar_solicitud_y_no_revisarla_dos_veces(self):
+        respuesta = self.client.post(
+            reverse("farmacia:solicitar_receta"),
+            self.datos_solicitud_receta(),
+        )
+        self.assertEqual(respuesta.status_code, 302)
+        solicitud = SolicitudRevisionReceta.objects.get()
+        self.addCleanup(lambda: solicitud.foto_receta.delete(save=False))
+
+        quimico = User.objects.create_user(
+            username="quimico_rechazo",
+            password="Revision-test-123",
+            is_active=True,
+        )
+        quimico.groups.add(Group.objects.get_or_create(name=GRUPO_FARMACEUTICO)[0])
+        self.client.force_login(quimico)
+
+        respuesta = self.client.post(
+            reverse("farmacia:resolver_receta", args=(solicitud.pk,)),
+            {"decision": "rechazar", "respuesta": "La foto está borrosa."},
+            follow=True,
+        )
+
+        self.assertContains(respuesta, "quedó rechazada")
+        solicitud.refresh_from_db()
+        self.assertEqual(solicitud.estado, SolicitudRevisionReceta.Estado.RECHAZADA)
+        self.assertEqual(solicitud.respuesta, "La foto está borrosa.")
+
+        respuesta = self.client.post(
+            reverse("farmacia:resolver_receta", args=(solicitud.pk,)),
+            {"decision": "aprobar"},
+            follow=True,
+        )
+
+        self.assertContains(respuesta, "Esta solicitud ya fue revisada.")
+        solicitud.refresh_from_db()
+        self.assertEqual(solicitud.estado, SolicitudRevisionReceta.Estado.RECHAZADA)
+
+    def test_formulario_rechaza_archivo_que_no_es_imagen(self):
+        datos = self.datos_solicitud_receta()
+        datos["foto_receta"] = SimpleUploadedFile(
+            "receta.png",
+            b"esto no es una imagen",
+            content_type="image/png",
+        )
+
+        respuesta = self.client.post(
+            reverse("farmacia:solicitar_receta"),
+            datos,
+        )
+
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertTrue(respuesta.context["form"].errors["foto_receta"])
+        self.assertFalse(SolicitudRevisionReceta.objects.exists())
 
     def test_caja_rechaza_cantidad_superior_al_stock_vendible(self):
         quimico = User.objects.create_user(
@@ -518,6 +869,8 @@ class RegistroUsuarioTests(TestCase):
             "farmacia_merma_changelist",
             "farmacia_ventarecetaretenida_changelist",
             "farmacia_simulacionpago_changelist",
+            "farmacia_ventacaja_changelist",
+            "farmacia_detalleventacaja_changelist",
             "farmacia_autorizacionexcepcional_changelist",
             "farmacia_solicitudcuenta_changelist",
             "auth_user_changelist",
@@ -624,6 +977,7 @@ class RegistroUsuarioTests(TestCase):
         self.assertEqual(respuesta.status_code, 302)
         merma = Merma.objects.get(ingreso=ingreso)
         self.assertEqual(merma.registrado_por, self.admin)
+        ingreso.refresh_from_db()
         self.assertEqual(ingreso.stock_disponible, 8)
 
     def test_stock_calcula_ingresos_menos_mermas_y_limita_merma(self):

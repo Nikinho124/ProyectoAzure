@@ -184,6 +184,58 @@
             font-size: 0.87rem;
         }
 
+        .confirmar-venta {
+            width: 100%;
+            min-height: 44px;
+            margin-top: 0.8rem;
+            border: 0;
+            border-radius: 6px;
+            color: #fff;
+            background: #176b52;
+            font: inherit;
+            font-weight: 700;
+            cursor: pointer;
+        }
+
+        .medio-pago {
+            display: grid;
+            gap: 0.4rem;
+            margin-top: 1rem;
+            color: #263a30;
+            font-weight: 700;
+        }
+
+        .medio-pago select {
+            min-height: 42px;
+            padding: 0.5rem;
+            border: 1px solid #b9cbc0;
+            border-radius: 6px;
+            background: #fff;
+            color: #1d3027;
+            font: inherit;
+        }
+
+        .pagos-recientes {
+            margin-top: 1.5rem;
+        }
+
+        .pagos-recientes h2 {
+            color: #183b2e;
+        }
+
+        .pagos-recientes table {
+            width: 100%;
+            border-collapse: collapse;
+            color: #263a30;
+        }
+
+        .pagos-recientes th,
+        .pagos-recientes td {
+            padding: 0.65rem;
+            border-bottom: 1px solid #dce7e0;
+            text-align: left;
+        }
+
         .oculto-accesible {
             position: absolute;
             width: 1px;
@@ -231,7 +283,7 @@
     <section class="titulo-pagina">
         <div>
             <h1>Caja</h1>
-            <p>Busca medicamentos y prepara los productos para una venta.</p>
+            <p>Busca productos, confirma el medio de pago y registra una venta simulada.</p>
         </div>
         <a class="boton-secundario" href="{% url 'farmacia:inicio' %}">Volver al inicio</a>
     </section>
@@ -256,7 +308,7 @@
                             <h3>{{ medicamento.nombre }}</h3>
                             <p>C&oacute;digo: {{ medicamento.codigo }}</p>
                             {% if medicamento.requiere_receta %}
-                                <p class="condicion-receta">Con receta</p>
+                                <p class="condicion-receta">Con receta · requiere validación</p>
                             {% else %}
                                 <p class="condicion-receta sin-receta">Sin receta</p>
                             {% endif %}
@@ -281,8 +333,8 @@
                                 max="{{ medicamento.stock_vendible }}"
                                 {% if medicamento.stock_vendible <= 0 %}disabled{% endif %}
                             >
-                            <button type="submit" {% if medicamento.stock_vendible <= 0 %}disabled{% endif %}>
-                                {% if medicamento.stock_vendible <= 0 %}Sin stock{% else %}Agregar{% endif %}
+                            <button type="submit" {% if medicamento.stock_vendible <= 0 or medicamento.requiere_receta %}disabled{% endif %}>
+                                {% if medicamento.stock_vendible <= 0 %}Sin stock{% elif medicamento.requiere_receta %}No disponible en caja{% else %}Agregar{% endif %}
                             </button>
                         </form>
                     </article>
@@ -325,11 +377,28 @@
                         <span>Por configurar</span>
                     {% endif %}
                 </div>
-                <p class="aviso-caja">
-                    Esta es una caja inicial para preparar la venta. El cobro, la emisi&oacute;n
-                    de comprobante y el descuento definitivo de inventario se agregar&aacute;n
-                    en la siguiente etapa.
-                </p>
+                {% if carrito_tiene_precios %}
+                    <form method="post">
+                        {% csrf_token %}
+                        <input type="hidden" name="accion" value="confirmar_venta">
+                        <input type="hidden" name="checkout_key" value="{{ checkout_key }}">
+                        <label class="medio-pago" for="medio-pago">
+                            Medio de pago simulado
+                            <select id="medio-pago" name="medio_pago" required>
+                                {% for valor, etiqueta in medios_pago %}
+                                    <option value="{{ valor }}">{{ etiqueta }}</option>
+                                {% endfor %}
+                            </select>
+                        </label>
+                        <button class="confirmar-venta" type="submit">
+                            Confirmar venta y descontar stock
+                        </button>
+                    </form>
+                {% else %}
+                    <p class="aviso-caja">
+                        Configura el precio de todos los productos para habilitar la confirmaci&oacute;n.
+                    </p>
+                {% endif %}
                 <form method="post">
                     {% csrf_token %}
                     <input type="hidden" name="accion" value="vaciar">
@@ -342,4 +411,32 @@
             {% endif %}
         </aside>
     </div>
+
+    <section class="panel pagos-recientes" aria-labelledby="pagos-recientes-titulo">
+        <h2 id="pagos-recientes-titulo">Pagos simulados recientes</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Venta</th>
+                    <th>Fecha</th>
+                    <th>Medio</th>
+                    <th>Estado</th>
+                    <th>Total</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for pago in pagos_recientes %}
+                    <tr>
+                        <td>#{{ pago.venta_caja_id }}</td>
+                        <td>{{ pago.fecha_simulacion|date:"d/m/Y H:i" }}</td>
+                        <td>{{ pago.get_medio_pago_display }}</td>
+                        <td>{{ pago.get_estado_display }}</td>
+                        <td>{{ pago.monto|moneda_chilena }}</td>
+                    </tr>
+                {% empty %}
+                    <tr><td colspan="5">Todav&iacute;a no hay pagos registrados.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </section>
 {% endblock %}

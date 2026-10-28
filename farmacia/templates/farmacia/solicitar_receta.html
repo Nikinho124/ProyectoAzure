@@ -1,0 +1,162 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Solicitar revisión de receta | FarmaSistem</title>
+    <link rel="stylesheet" href="{% static 'farmacia/sitio.css' %}?v=1">
+    <style>
+        :root {
+            font-family: Arial, sans-serif;
+            color: #18332b;
+            background: #f4f8f6;
+        }
+
+        body {
+            min-height: 100vh;
+            margin: 0;
+        }
+
+        main {
+            width: min(760px, 100% - 2rem);
+            margin: 2rem auto;
+        }
+
+        .panel {
+            padding: 1.5rem;
+            border: 1px solid #dce7e1;
+            border-radius: 9px;
+            background: #fff;
+        }
+
+        h1,
+        h2 {
+            color: #183b2e;
+        }
+
+        .explicacion {
+            color: #42574a;
+            line-height: 1.55;
+        }
+
+        .campo {
+            margin-top: 1rem;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 0.4rem;
+            font-weight: 700;
+        }
+
+        input,
+        select {
+            width: 100%;
+            min-height: 44px;
+            padding: 0.6rem;
+            border: 1px solid #9eb7aa;
+            border-radius: 6px;
+            color: #18332b;
+            background: #fff;
+            font: inherit;
+        }
+
+        input[type="file"] {
+            min-height: auto;
+        }
+
+        .ayuda,
+        .errorlist {
+            color: #6b4d12;
+            font-size: 0.9rem;
+        }
+
+        .errorlist {
+            color: #a12727;
+        }
+
+        .acciones {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+            margin-top: 1.5rem;
+        }
+
+        .boton {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 44px;
+            padding: 0.65rem 1rem;
+            border: 1px solid #176b52;
+            border-radius: 6px;
+            color: #fff;
+            background: #176b52;
+            font: inherit;
+            font-weight: 700;
+            text-decoration: none;
+            cursor: pointer;
+        }
+
+        .boton-secundario {
+            color: #145c45;
+            background: #fff;
+        }
+
+        .mensaje {
+            padding: 0.85rem;
+            border-radius: 6px;
+            color: #174a32;
+            background: #e9f6ee;
+        }
+
+        @media (max-width: 580px) {
+            .panel {
+                padding: 1rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <main>
+        <section class="panel">
+            <h1>Solicitar revisión de receta</h1>
+            {% for message in messages %}
+                <p class="mensaje" role="status">{{ message }}</p>
+            {% endfor %}
+            <p class="explicacion">
+                Completa los datos y adjunta una foto legible. La imagen se guarda de forma
+                privada y solo el personal farmacéutico autorizado puede revisarla.
+                Enviar la solicitud no equivale a una autorización de venta.
+            </p>
+            <form method="post" enctype="multipart/form-data">
+                {% csrf_token %}
+                {% for field in form %}
+                    <div class="campo">
+                        <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+                        {{ field }}
+                        {% if field.help_text %}
+                            <p class="ayuda">{{ field.help_text }}</p>
+                        {% endif %}
+                        {% for error in field.errors %}
+                            <p class="errorlist" role="alert">{{ error }}</p>
+                        {% endfor %}
+                    </div>
+                {% endfor %}
+                {% for error in form.non_field_errors %}
+                    <p class="errorlist" role="alert">{{ error }}</p>
+                {% endfor %}
+                <p class="ayuda">Formatos permitidos: JPG, PNG o WEBP. Tamaño máximo: 5 MB.</p>
+                <div class="acciones">
+                    <button class="boton" type="submit">Enviar a revisión</button>
+                    <a class="boton boton-secundario" href="{% url 'catalogo' %}">
+                        Volver al catálogo
+                    </a>
+                </div>
+            </form>
+        </section>
+    </main>
+    {% include "farmacia/includes/pie_pagina.html" %}
+</body>
+</html>

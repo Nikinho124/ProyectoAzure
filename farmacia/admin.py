@@ -19,11 +19,13 @@ from django.views.decorators.http import require_POST
 
 from farmacia.models import (
     AutorizacionExcepcional,
+    DetalleVentaCaja,
     IngresoInventario,
     Medicamento,
     Merma,
     SimulacionPago,
     SolicitudCuenta,
+    VentaCaja,
     VentaRecetaRetenida,
 )
 
@@ -141,19 +143,7 @@ class FarmaGroupAdmin(admin.ModelAdmin):
 
 
 def _ingresos_con_stock_disponible():
-    mermas = (
-        Merma.objects.filter(ingreso_id=OuterRef("pk"))
-        .values("ingreso_id")
-        .annotate(total=Sum("cantidad"))
-        .values("total")[:1]
-    )
-    return IngresoInventario.objects.annotate(
-        stock_restante=F("cantidad")
-        - Coalesce(
-            Subquery(mermas, output_field=IntegerField()),
-            Value(0),
-        )
-    )
+    return IngresoInventario.objects.all()
 
 
 class FarmaAdminSite(admin.AdminSite):
@@ -178,7 +168,7 @@ class FarmaAdminSite(admin.AdminSite):
     def index(self, request, extra_context=None):
         hoy = timezone.localdate()
         hasta_30_dias = hoy + timedelta(days=30)
-        ingresos = _ingresos_con_stock_disponible().filter(stock_restante__gt=0)
+        ingresos = _ingresos_con_stock_disponible().filter(stock_disponible__gt=0)
         lotes_vigentes = IngresoInventario.objects.filter(
             fecha_vencimiento__gte=hoy
         )
@@ -187,26 +177,13 @@ class FarmaAdminSite(admin.AdminSite):
                 Subquery(
                     lotes_vigentes.filter(medicamento_id=OuterRef("pk"))
                     .values("medicamento_id")
-                    .annotate(total=Sum("cantidad"))
+                    .annotate(total=Sum("stock_disponible"))
                     .values("total")[:1],
                     output_field=IntegerField(),
                 ),
                 Value(0),
             ),
-            _mermado=Coalesce(
-                Subquery(
-                    Merma.objects.filter(
-                        ingreso__in=lotes_vigentes,
-                        ingreso__medicamento_id=OuterRef("pk"),
-                    )
-                    .values("ingreso__medicamento_id")
-                    .annotate(total=Sum("cantidad"))
-                    .values("total")[:1],
-                    output_field=IntegerField(),
-                ),
-                Value(0),
-            ),
-        ).annotate(_stock_actual=F("_ingresado") - F("_mermado"))
+        ).annotate(_stock_actual=F("_ingresado"))
 
         extra_context = {
             **(extra_context or {}),
@@ -286,29 +263,19 @@ class MedicamentoAdmin(admin.ModelAdmin):
     )
 
     def get_queryset(self, request):
-        lotes_vigentes = IngresoInventario.objects.filter(
-            fecha_vencimiento__gte=timezone.localdate()
-        )
         ingresado = (
-            lotes_vigentes.filter(medicamento_id=OuterRef("pk"))
-            .values("medicamento_id")
-            .annotate(total=Sum("cantidad"))
-            .values("total")[:1]
-        )
-        mermado = (
-            Merma.objects.filter(
-                ingreso__in=lotes_vigentes,
-                ingreso__medicamento_id=OuterRef("pk"),
+            IngresoInventario.objects.filter(
+                medicamento_id=OuterRef("pk"),
+                fecha_vencimiento__gte=timezone.localdate(),
             )
-            .values("ingreso__medicamento_id")
-            .annotate(total=Sum("cantidad"))
+            .values("medicamento_id")
+            .annotate(total=Sum("stock_disponible"))
             .values("total")[:1]
         )
         return super().get_queryset(request).annotate(
             _stock_actual=Coalesce(
                 Subquery(ingresado, output_field=IntegerField()), Value(0)
             )
-            - Coalesce(Subquery(mermado, output_field=IntegerField()), Value(0))
         )
 
     @admin.display(description="Stock disponible", ordering="_stock_actual")
@@ -372,20 +339,11 @@ class IngresoInventarioAdmin(admin.ModelAdmin):
     list_per_page = 25
 
     def get_queryset(self, request):
-        mermas = (
-            Merma.objects.filter(ingreso_id=OuterRef("pk"))
-            .values("ingreso_id")
-            .annotate(total=Sum("cantidad"))
-            .values("total")[:1]
-        )
-        return super().get_queryset(request).annotate(
-            _stock_restante=F("cantidad")
-            - Coalesce(Subquery(mermas, output_field=IntegerField()), Value(0))
-        )
+        return super().get_queryset(request)
 
-    @admin.display(description="Stock actual del lote", ordering="_stock_restante")
+    @admin.display(description="Stock actual del lote", ordering="stock_disponible")
     def stock_disponible_columna(self, obj):
-        return obj._stock_restante
+        return obj.stock_disponible
 
     @admin.display(description="Estado del lote")
     def estado_vencimiento(self, obj):
@@ -447,7 +405,7 @@ class MermaAdmin(admin.ModelAdmin):
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "ingreso":
             kwargs["queryset"] = _ingresos_con_stock_disponible().filter(
-                stock_restante__gt=0
+                stock_disponible__gt=0
             ).select_related("medicamento").order_by("fecha_vencimiento")
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
@@ -489,16 +447,78 @@ class VentaRecetaRetenidaAdmin(admin.ModelAdmin):
 @admin.register(SimulacionPago, site=farmacia_admin_site)
 class SimulacionPagoAdmin(admin.ModelAdmin):
     list_display = (
-        "venta",
+        "venta_mostrada",
         "monto",
         "medio_pago",
         "estado",
         "fecha_simulacion",
     )
     list_filter = ("estado", "medio_pago", "fecha_simulacion")
-    search_fields = ("venta__cliente_rut", "referencia_simulada")
-    list_select_related = ("venta",)
+    search_fields = (
+        "venta__cliente_rut",
+        "venta_caja__cajero__username",
+        "referencia_simulada",
+    )
+    list_select_related = ("venta", "venta_caja", "venta_caja__cajero")
     readonly_fields = tuple(field.name for field in SimulacionPago._meta.fields)
+    list_per_page = 25
+
+    @admin.display(description="Venta")
+    def venta_mostrada(self, obj):
+        return obj.venta_caja or obj.venta
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def has_add_permission(self, request):
+        return False
+
+
+@admin.register(VentaCaja, site=farmacia_admin_site)
+class VentaCajaAdmin(admin.ModelAdmin):
+    list_display = ("id", "fecha_venta", "cajero", "total", "estado")
+    list_filter = ("estado", "fecha_venta")
+    search_fields = ("cajero__username", "simulaciones_pago__referencia_simulada")
+    list_select_related = ("cajero",)
+    readonly_fields = tuple(field.name for field in VentaCaja._meta.fields)
+    date_hierarchy = "fecha_venta"
+    list_per_page = 25
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(DetalleVentaCaja, site=farmacia_admin_site)
+class DetalleVentaCajaAdmin(admin.ModelAdmin):
+    list_display = (
+        "venta",
+        "medicamento",
+        "lote",
+        "cantidad",
+        "precio_unitario",
+        "subtotal",
+    )
+    search_fields = ("venta__id", "ingreso__medicamento__nombre", "ingreso__lote")
+    list_select_related = ("venta", "ingreso__medicamento")
+    readonly_fields = tuple(field.name for field in DetalleVentaCaja._meta.fields)
+
+    @admin.display(description="Medicamento")
+    def medicamento(self, obj):
+        return obj.ingreso.medicamento
+
+    @admin.display(description="Lote")
+    def lote(self, obj):
+        return obj.ingreso.lote
+
+    @admin.display(description="Subtotal")
+    def subtotal(self, obj):
+        return obj.subtotal
 
     def has_add_permission(self, request):
         return False

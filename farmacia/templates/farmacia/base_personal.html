@@ -198,6 +198,9 @@
             <a href="{% url 'farmacia:caja' %}" {% if request.resolver_match.url_name == "caja" %}aria-current="page"{% endif %}>
                 Caja
             </a>
+            <a href="{% url 'farmacia:revisar_recetas' %}" {% if request.resolver_match.url_name == "revisar_recetas" %}aria-current="page"{% endif %}>
+                Revisar recetas
+            </a>
         </nav>
         <div class="nav-personal">
             <span class="saludo">Hola, {{ request.user.get_username }}</span>

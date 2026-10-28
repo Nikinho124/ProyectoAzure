@@ -165,6 +165,9 @@
             <p>FarmaSistem · Vista inicial</p>
         </div>
         <nav class="acciones" aria-label="Cuenta de usuario">
+            <a class="boton" href="{% url 'farmacia:solicitar_receta' %}">
+                Enviar receta a revisión
+            </a>
             {% if user.is_authenticated %}
                 <span>Hola, {{ user.get_username }}</span>
                 <form method="post" action="{% url 'logout' %}">

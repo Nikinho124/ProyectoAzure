@@ -1,12 +1,15 @@
 import re
+import uuid
 
 from django.conf import settings
 from django.contrib.auth.models import Group
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.validators import MinValueValidator
 from django.db import models, transaction
-from django.db.models import Q, Sum
+from django.db.models import F, Q, Sum
 from django.utils import timezone
+
+from farmacia.storage import PrivatePrescriptionStorage
 
 
 GRUPO_FARMACEUTICO = "Auditor_QF"
@@ -102,6 +105,122 @@ class VentaRecetaRetenida(models.Model):
         return f"Venta #{self.pk} - {self.cliente_rut}"
 
 
+class SolicitudRevisionReceta(models.Model):
+    class Estado(models.TextChoices):
+        PENDIENTE = "pendiente", "Pendiente de revisión"
+        APROBADA = "aprobada", "Aprobada"
+        RECHAZADA = "rechazada", "Rechazada"
+
+    cliente = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="solicitudes_revision_receta",
+        null=True,
+        blank=True,
+        verbose_name="Cuenta del cliente",
+    )
+    cliente_nombre = models.CharField("Nombre del cliente", max_length=150)
+    cliente_rut = models.CharField(
+        "RUT del cliente",
+        max_length=12,
+        validators=[validar_rut_chileno],
+    )
+    medicamento = models.CharField("Medicamento solicitado", max_length=200)
+    cantidad = models.PositiveSmallIntegerField(
+        "Cantidad solicitada",
+        validators=[MinValueValidator(1)],
+    )
+    medico_prescriptor = models.CharField("Médico prescriptor", max_length=200)
+    foto_receta = models.ImageField(
+        "Foto de la receta",
+        upload_to="solicitudes_receta/%Y/%m/",
+        storage=PrivatePrescriptionStorage(),
+    )
+    estado = models.CharField(
+        "Estado",
+        max_length=10,
+        choices=Estado.choices,
+        default=Estado.PENDIENTE,
+    )
+    revisada_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="solicitudes_receta_revisadas",
+        null=True,
+        blank=True,
+        verbose_name="Químico farmacéutico que revisa",
+    )
+    respuesta = models.TextField("Observación de la revisión", blank=True)
+    fecha_solicitud = models.DateTimeField("Fecha de solicitud", auto_now_add=True)
+    fecha_revision = models.DateTimeField(
+        "Fecha de revisión",
+        null=True,
+        blank=True,
+    )
+
+    class Meta:
+        verbose_name = "solicitud de revisión de receta"
+        verbose_name_plural = "solicitudes de revisión de recetas"
+        ordering = ("-fecha_solicitud",)
+        constraints = [
+            models.CheckConstraint(
+                check=Q(cantidad__gt=0),
+                name="solicitud_receta_cantidad_positiva",
+            ),
+            models.CheckConstraint(
+                check=(
+                    Q(
+                        estado="pendiente",
+                        revisada_por__isnull=True,
+                        fecha_revision__isnull=True,
+                    )
+                    | Q(
+                        estado__in=("aprobada", "rechazada"),
+                        revisada_por__isnull=False,
+                        fecha_revision__isnull=False,
+                    )
+                ),
+                name="solicitud_receta_revision_consistente",
+            ),
+        ]
+
+    def resolver(self, revisor, aprobada, respuesta=""):
+        if not (
+            revisor.is_superuser
+            or revisor.groups.filter(name=GRUPO_FARMACEUTICO).exists()
+        ):
+            raise PermissionDenied(
+                "Solo un químico farmacéutico puede revisar solicitudes de recetas."
+            )
+
+        with transaction.atomic():
+            solicitud = type(self).objects.select_for_update().get(pk=self.pk)
+            if solicitud.estado != self.Estado.PENDIENTE:
+                raise ValidationError("Esta solicitud ya fue revisada.")
+            solicitud.estado = (
+                self.Estado.APROBADA if aprobada else self.Estado.RECHAZADA
+            )
+            solicitud.revisada_por = revisor
+            solicitud.respuesta = respuesta.strip()
+            solicitud.fecha_revision = timezone.now()
+            solicitud.save(
+                update_fields=(
+                    "estado",
+                    "revisada_por",
+                    "respuesta",
+                    "fecha_revision",
+                )
+            )
+
+        self.estado = solicitud.estado
+        self.revisada_por = solicitud.revisada_por
+        self.respuesta = solicitud.respuesta
+        self.fecha_revision = solicitud.fecha_revision
+
+    def __str__(self):
+        return f"Solicitud de receta #{self.pk} - {self.get_estado_display()}"
+
+
 class SimulacionPago(models.Model):
     class MedioPago(models.TextChoices):
         EFECTIVO = "efectivo", "Efectivo"
@@ -119,6 +238,16 @@ class SimulacionPago(models.Model):
         on_delete=models.PROTECT,
         related_name="simulaciones_pago",
         verbose_name="Venta",
+        null=True,
+        blank=True,
+    )
+    venta_caja = models.ForeignKey(
+        "VentaCaja",
+        on_delete=models.PROTECT,
+        related_name="simulaciones_pago",
+        verbose_name="Venta de caja",
+        null=True,
+        blank=True,
     )
     monto = models.DecimalField(
         "Monto simulado",
@@ -153,10 +282,109 @@ class SimulacionPago(models.Model):
                 check=Q(monto__gt=0),
                 name="simulacion_pago_monto_positivo",
             ),
+            models.CheckConstraint(
+                check=(
+                    Q(venta__isnull=False, venta_caja__isnull=True)
+                    | Q(venta__isnull=True, venta_caja__isnull=False)
+                ),
+                name="simulacion_pago_una_venta",
+            ),
         ]
 
     def __str__(self):
-        return f"Pago simulado de venta #{self.venta_id}: {self.get_estado_display()}"
+        venta = self.venta_caja or self.venta
+        return f"Pago simulado de venta #{venta.pk}: {self.get_estado_display()}"
+
+
+class VentaCaja(models.Model):
+    class Estado(models.TextChoices):
+        COMPLETADA = "completada", "Completada"
+
+    idempotency_key = models.UUIDField(
+        "Identificador de operación",
+        default=uuid.uuid4,
+        unique=True,
+        editable=False,
+    )
+    cajero = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="ventas_caja_realizadas",
+        verbose_name="Cajero",
+    )
+    total = models.DecimalField(
+        "Total",
+        max_digits=12,
+        decimal_places=2,
+        validators=[MinValueValidator(0.01)],
+    )
+    estado = models.CharField(
+        "Estado",
+        max_length=12,
+        choices=Estado.choices,
+        default=Estado.COMPLETADA,
+    )
+    fecha_venta = models.DateTimeField("Fecha de venta", auto_now_add=True)
+
+    class Meta:
+        verbose_name = "venta de caja"
+        verbose_name_plural = "ventas de caja"
+        ordering = ("-fecha_venta",)
+        constraints = [
+            models.CheckConstraint(
+                check=Q(total__gt=0),
+                name="venta_caja_total_positivo",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Venta #{self.pk} — {self.get_estado_display()}"
+
+
+class DetalleVentaCaja(models.Model):
+    venta = models.ForeignKey(
+        VentaCaja,
+        on_delete=models.PROTECT,
+        related_name="detalles",
+        verbose_name="Venta",
+    )
+    ingreso = models.ForeignKey(
+        "IngresoInventario",
+        on_delete=models.PROTECT,
+        related_name="detalles_venta",
+        verbose_name="Lote descontado",
+    )
+    cantidad = models.PositiveIntegerField(
+        "Cantidad vendida",
+        validators=[MinValueValidator(1)],
+    )
+    precio_unitario = models.DecimalField(
+        "Precio unitario al vender",
+        max_digits=12,
+        decimal_places=2,
+        validators=[MinValueValidator(0)],
+    )
+
+    class Meta:
+        verbose_name = "detalle de venta"
+        verbose_name_plural = "detalles de venta"
+        constraints = [
+            models.CheckConstraint(
+                check=Q(cantidad__gt=0),
+                name="detalle_venta_cantidad_positiva",
+            ),
+            models.CheckConstraint(
+                check=Q(precio_unitario__gte=0),
+                name="detalle_venta_precio_no_negativo",
+            ),
+        ]
+
+    @property
+    def subtotal(self):
+        return self.cantidad * self.precio_unitario
+
+    def __str__(self):
+        return f"{self.ingreso.medicamento} × {self.cantidad}"
 
 
 class AutorizacionExcepcional(models.Model):
@@ -398,11 +626,7 @@ class Medicamento(models.Model):
         lotes_vigentes = self.ingresos.filter(
             fecha_vencimiento__gte=timezone.localdate()
         )
-        ingresado = lotes_vigentes.aggregate(total=Sum("cantidad"))["total"] or 0
-        mermado = Merma.objects.filter(ingreso__in=lotes_vigentes).aggregate(
-            total=Sum("cantidad")
-        )["total"] or 0
-        return ingresado - mermado
+        return lotes_vigentes.aggregate(total=Sum("stock_disponible"))["total"] or 0
 
     def __str__(self):
         return f"{self.nombre} ({self.codigo})"
@@ -419,6 +643,11 @@ class IngresoInventario(models.Model):
     cantidad = models.PositiveIntegerField(
         "Cantidad recibida",
         validators=[MinValueValidator(1)],
+    )
+    stock_disponible = models.PositiveIntegerField(
+        "Stock disponible",
+        default=0,
+        editable=False,
     )
     fecha_vencimiento = models.DateField("Fecha de vencimiento")
     proveedor = models.CharField("Proveedor", max_length=200, blank=True)
@@ -439,15 +668,26 @@ class IngresoInventario(models.Model):
                 check=Q(cantidad__gt=0),
                 name="ingreso_inventario_cantidad_positiva",
             ),
+            models.CheckConstraint(
+                check=Q(stock_disponible__gte=0),
+                name="ingreso_stock_no_negativo",
+            ),
         ]
+
+    def save(self, *args, **kwargs):
+        if self._state.adding:
+            self.stock_disponible = self.cantidad
+        else:
+            original = type(self).objects.only("cantidad").get(pk=self.pk)
+            if self.cantidad != original.cantidad:
+                raise ValidationError(
+                    {"cantidad": "No se puede modificar la cantidad de un ingreso guardado."}
+                )
+        super().save(*args, **kwargs)
 
     @property
     def mermas_totales(self):
         return self.mermas.aggregate(total=Sum("cantidad"))["total"] or 0
-
-    @property
-    def stock_disponible(self):
-        return self.cantidad - self.mermas_totales
 
     def __str__(self):
         return f"{self.medicamento} — Lote {self.lote}"
@@ -496,27 +736,36 @@ class Merma(models.Model):
         if not self.ingreso_id or not self.cantidad:
             return
 
-        otras_mermas = Merma.objects.filter(ingreso_id=self.ingreso_id)
-        if self.pk:
-            otras_mermas = otras_mermas.exclude(pk=self.pk)
-        cantidad_ya_mermada = otras_mermas.aggregate(total=Sum("cantidad"))[
-            "total"
-        ] or 0
-        disponible = self.ingreso.cantidad - cantidad_ya_mermada
-        if self.cantidad > disponible:
+        if self.cantidad > self.ingreso.stock_disponible:
             raise ValidationError(
                 {
                     "cantidad": (
-                        f"La cantidad supera el stock disponible del lote "
-                        f"({disponible} unidades)."
+                        "La cantidad supera el stock disponible del lote "
+                        f"({self.ingreso.stock_disponible} unidades)."
                     )
                 }
             )
 
     def save(self, *args, **kwargs):
         with transaction.atomic():
-            IngresoInventario.objects.select_for_update().get(pk=self.ingreso_id)
+            if self.pk:
+                raise ValidationError("Las mermas guardadas no se pueden modificar.")
+            ingreso_original = self.ingreso
+            self.ingreso = IngresoInventario.objects.select_for_update().get(
+                pk=self.ingreso_id
+            )
             self.full_clean()
+            actualizado = IngresoInventario.objects.filter(
+                pk=self.ingreso_id,
+                stock_disponible__gte=self.cantidad,
+            ).update(stock_disponible=F("stock_disponible") - self.cantidad)
+            if not actualizado:
+                raise ValidationError(
+                    {"cantidad": "El stock disponible cambió; revisa la cantidad."}
+                )
+            ingreso_original.stock_disponible = (
+                self.ingreso.stock_disponible - self.cantidad
+            )
             super().save(*args, **kwargs)
 
     def __str__(self):
