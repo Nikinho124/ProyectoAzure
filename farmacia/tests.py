@@ -85,6 +85,7 @@ class RegistroUsuarioTests(TestCase):
 
         self.assertEqual(respuesta.status_code, 200)
         self.assertContains(respuesta, "Registrarse")
+        self.assertNotContains(respuesta, "autofocus")
         self.assertContains(respuesta, "pie-sitio")
         self.assertContains(respuesta, "Tel&eacute;fono")
         self.assertContains(respuesta, 'value="farmaceutico"')
@@ -97,7 +98,7 @@ class RegistroUsuarioTests(TestCase):
         self.assertEqual(respuesta.status_code, 200)
         self.assertContains(respuesta, "pie-sitio")
         self.assertContains(respuesta, "Horarios de atenci")
-        self.assertContains(respuesta, "farmacia/sitio.css?v=1")
+        self.assertContains(respuesta, "farmacia/sitio.css?v=3")
 
     def test_superusuario_jefe_qf_va_al_admin_al_iniciar_sesion(self):
         self.admin.username = "jefe_qf"
@@ -521,6 +522,10 @@ class RegistroUsuarioTests(TestCase):
         quimico.groups.add(Group.objects.get_or_create(name=GRUPO_FARMACEUTICO)[0])
         self.client.force_login(quimico)
 
+        inicio = self.client.get(reverse("farmacia:inicio"))
+        self.assertEqual(inicio.context["recetas_pendientes"], 1)
+        self.assertContains(inicio, "Recetas por revisar")
+
         bandeja = self.client.get(reverse("farmacia:revisar_recetas"))
         self.assertContains(bandeja, "Cliente de prueba")
         self.assertContains(bandeja, "Medicamento recetado")
@@ -760,7 +765,7 @@ class RegistroUsuarioTests(TestCase):
         )
         pagina_revision = self.client.get(revision_url)
         self.assertEqual(pagina_revision.status_code, 200)
-        self.assertContains(pagina_revision, "farmacia/admin.css?v=3")
+        self.assertContains(pagina_revision, "farmacia/admin.css?v=5")
         self.assertContains(pagina_revision, "Aprobar y activar cuenta")
 
         respuesta = self.client.post(
@@ -853,13 +858,36 @@ class RegistroUsuarioTests(TestCase):
         respuesta = self.client.get(reverse("admin:index"))
 
         self.assertEqual(respuesta.status_code, 200)
-        self.assertContains(respuesta, "farmacia/admin.css?v=3")
+        self.assertContains(respuesta, "farmacia/admin.css?v=5")
         self.assertContains(respuesta, "Resumen de inventario")
         self.assertContains(respuesta, "Abrir Caja")
         self.assertContains(respuesta, reverse("farmacia:caja"))
         self.assertContains(respuesta, "Registrar o revisar ingresos")
         self.assertContains(respuesta, "Solicitudes de qu")
         self.assertNotContains(respuesta, "pie-sitio")
+
+    def test_jefe_no_ve_accesos_restringidos_a_solicitudes_de_cuenta(self):
+        jefe = User.objects.create_user(
+            username="jefe_farmacia",
+            password="Jefe-password-123",
+            is_staff=True,
+        )
+        jefe.user_permissions.add(
+            Permission.objects.get(
+                content_type__app_label="farmacia",
+                codename="view_medicamento",
+            )
+        )
+        self.client.force_login(jefe)
+
+        respuesta = self.client.get(reverse("admin:index"))
+
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertContains(respuesta, "Control de farmacia")
+        self.assertNotContains(
+            respuesta,
+            reverse("admin:farmacia_solicitudcuenta_changelist"),
+        )
 
     def test_listas_principales_del_admin_abren_sin_error(self):
         self.client.force_login(self.admin)

@@ -2,200 +2,117 @@
 
 {% block title %}Revisión de recetas{% endblock %}
 
-{% block extra_style %}
-    <style>
-        .seccion-recetas {
-            margin-bottom: 2rem;
-        }
-
-        .seccion-recetas h2 {
-            color: #183b2e;
-        }
-
-        .solicitudes {
-            display: grid;
-            gap: 1rem;
-        }
-
-        .solicitud {
-            display: grid;
-            grid-template-columns: minmax(240px, 1fr) minmax(260px, 1fr);
-            gap: 1.25rem;
-        }
-
-        .solicitud h3 {
-            margin-top: 0;
-            color: #183b2e;
-        }
-
-        .datos p {
-            margin: 0.45rem 0;
-            color: #354b3e;
-        }
-
-        .foto-receta {
-            display: block;
-            width: 100%;
-            max-height: 560px;
-            border: 1px solid #dce7e0;
-            border-radius: 7px;
-            object-fit: contain;
-            background: #f4f8f6;
-        }
-
-        .respuesta {
-            display: block;
-            width: 100%;
-            min-height: 78px;
-            margin: 1rem 0;
-            padding: 0.65rem;
-            border: 1px solid #b9cbc0;
-            border-radius: 6px;
-            font: inherit;
-        }
-
-        .acciones {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 0.65rem;
-        }
-
-        .accion {
-            min-height: 40px;
-            padding: 0.55rem 0.8rem;
-            border: 1px solid #176b52;
-            border-radius: 6px;
-            color: #fff;
-            background: #176b52;
-            font: inherit;
-            font-weight: 700;
-            cursor: pointer;
-        }
-
-        .accion-rechazar {
-            border-color: #9c3434;
-            background: #9c3434;
-        }
-
-        .estado {
-            display: inline-block;
-            padding: 0.3rem 0.55rem;
-            border-radius: 999px;
-            color: #6b4d12;
-            background: #fff3d6;
-            font-size: 0.85rem;
-            font-weight: 700;
-        }
-
-        .estado-aprobada {
-            color: #24533b;
-            background: #e7f4eb;
-        }
-
-        .estado-rechazada {
-            color: #8b3030;
-            background: #fff0f0;
-        }
-
-        .vacio {
-            color: #42574a;
-        }
-
-        @media (max-width: 760px) {
-            .solicitud {
-                grid-template-columns: 1fr;
-            }
-        }
-    </style>
-{% endblock %}
-
 {% block content %}
-    <section class="titulo-pagina">
+    <section class="titulo-pagina portada-recetas">
         <div>
-            <h1>Revisión de recetas</h1>
-            <p>Revisa las imágenes y aprueba o rechaza las solicitudes recibidas.</p>
+            <p class="sobretitulo">ATENCI&Oacute;N FARMAC&Eacute;UTICA <span aria-hidden="true">/</span> REVISI&Oacute;N</p>
+            <h1>Revisi&oacute;n de recetas</h1>
+            <p>Eval&uacute;a cada solicitud con cuidado y deja una respuesta clara para el cliente.</p>
+        </div>
+        <div class="resumen-pendientes">
+            <span class="resumen-pendientes-numero">{{ pendientes|length }}</span>
+            <span><strong>Por revisar</strong><small>Solicitudes pendientes</small></span>
         </div>
     </section>
 
     <section class="seccion-recetas" aria-labelledby="pendientes-titulo">
-        <h2 id="pendientes-titulo">Pendientes de revisión ({{ pendientes|length }})</h2>
+        <div class="seccion-titulo seccion-titulo-compacta">
+            <div>
+                <p class="sobretitulo">PRIORIZA LA REVISI&Oacute;N</p>
+                <h2 id="pendientes-titulo">Pendientes</h2>
+            </div>
+            <span class="contador-productos">{{ pendientes|length }} solicitudes</span>
+        </div>
         <div class="solicitudes">
             {% for solicitud in pendientes %}
                 <article class="panel solicitud">
-                    <div class="datos">
-                        <h3>Solicitud #{{ solicitud.pk }}</h3>
-                        <p><strong>Cliente:</strong> {{ solicitud.cliente_nombre }}</p>
-                        <p><strong>RUT:</strong> {{ solicitud.cliente_rut }}</p>
-                        <p><strong>Medicamento:</strong> {{ solicitud.medicamento }}</p>
-                        <p><strong>Cantidad solicitada:</strong> {{ solicitud.cantidad }}</p>
-                        <p><strong>Médico prescriptor:</strong> {{ solicitud.medico_prescriptor }}</p>
-                        <p><strong>Recibida:</strong> {{ solicitud.fecha_solicitud|date:"d/m/Y H:i" }}</p>
-                        <img
-                            class="foto-receta"
-                            src="{% url 'farmacia:foto_receta' solicitud.pk %}"
-                            alt="Foto de receta de la solicitud {{ solicitud.pk }}"
-                        >
+                    <div class="solicitud-informacion">
+                        <div class="solicitud-titulo">
+                            <span class="solicitud-folio">FOLIO #{{ solicitud.pk }}</span>
+                            <span class="estado estado-pendiente">Pendiente</span>
+                        </div>
+                        <h3>{{ solicitud.medicamento }}</h3>
+                        <p class="solicitud-cantidad">{{ solicitud.cantidad }} unidad(es) solicitada(s)</p>
+                        <dl class="datos-solicitud">
+                            <div><dt>Cliente</dt><dd>{{ solicitud.cliente_nombre }}</dd></div>
+                            <div><dt>RUT</dt><dd>{{ solicitud.cliente_rut }}</dd></div>
+                            <div><dt>M&eacute;dico prescriptor</dt><dd>{{ solicitud.medico_prescriptor }}</dd></div>
+                            <div><dt>Recibida</dt><dd>{{ solicitud.fecha_solicitud|date:"d/m/Y · H:i" }}</dd></div>
+                        </dl>
+                        <a class="enlace-foto" href="{% url 'farmacia:foto_receta' solicitud.pk %}" target="_blank" rel="noopener">
+                            Ver receta en tama&ntilde;o completo <span aria-hidden="true">↗</span>
+                        </a>
                     </div>
-                    <div>
-                        <form method="post" action="{% url 'farmacia:resolver_receta' solicitud.pk %}">
+                    <div class="solicitud-revision">
+                        <p class="etiqueta-formulario">DOCUMENTO ADJUNTO</p>
+                        <a class="foto-enlace" href="{% url 'farmacia:foto_receta' solicitud.pk %}" target="_blank" rel="noopener" aria-label="Abrir receta completa de la solicitud {{ solicitud.pk }}">
+                            <img
+                                class="foto-receta"
+                                src="{% url 'farmacia:foto_receta' solicitud.pk %}"
+                                alt="Receta adjunta de la solicitud {{ solicitud.pk }}"
+                                loading="lazy"
+                            >
+                            <span class="foto-ampliar" aria-hidden="true">Ampliar ↗</span>
+                        </a>
+                        <form class="form-respuesta" method="post" action="{% url 'farmacia:resolver_receta' solicitud.pk %}">
                             {% csrf_token %}
-                            <label for="respuesta-{{ solicitud.pk }}">
-                                Observación para el cliente (opcional)
-                            </label>
+                            <label for="respuesta-{{ solicitud.pk }}">Observaci&oacute;n para el cliente <span>(opcional)</span></label>
                             <textarea
                                 class="respuesta"
                                 id="respuesta-{{ solicitud.pk }}"
                                 name="respuesta"
                                 maxlength="2000"
+                                placeholder="Agrega una indicaci&oacute;n clara y respetuosa..."
                             ></textarea>
                             <div class="acciones">
-                                <button class="accion" type="submit" name="decision" value="aprobar">
+                                <button class="accion accion-aprobar" type="submit" name="decision" value="aprobar">
                                     Aprobar revisión
                                 </button>
-                                <button
-                                    class="accion accion-rechazar"
-                                    type="submit"
-                                    name="decision"
-                                    value="rechazar"
-                                >
-                                    Rechazar revisión
+                                <button class="accion accion-rechazar" type="submit" name="decision" value="rechazar">
+                                    Rechazar
                                 </button>
                             </div>
                         </form>
                     </div>
                 </article>
             {% empty %}
-                <p class="panel vacio">No hay solicitudes pendientes.</p>
+                <div class="panel vacio">
+                    <span class="vacio-icono vacio-icono-correcto" aria-hidden="true">✓</span>
+                    <h3>Todo al d&iacute;a</h3>
+                    <p>No hay solicitudes pendientes de revisi&oacute;n.</p>
+                </div>
             {% endfor %}
         </div>
     </section>
 
-    <section class="seccion-recetas" aria-labelledby="revisadas-titulo">
-        <h2 id="revisadas-titulo">Solicitudes revisadas</h2>
-        <div class="solicitudes">
+    <section class="seccion-recetas seccion-historial" aria-labelledby="revisadas-titulo">
+        <div class="seccion-titulo seccion-titulo-compacta">
+            <div>
+                <p class="sobretitulo">TRAZABILIDAD</p>
+                <h2 id="revisadas-titulo">Solicitudes revisadas</h2>
+            </div>
+            <span class="contador-productos">{{ revisadas|length }} revisadas</span>
+        </div>
+        <div class="solicitudes solicitudes-historial">
             {% for solicitud in revisadas %}
-                <article class="panel datos">
-                    <h3>
-                        Solicitud #{{ solicitud.pk }}
-                        <span class="estado estado-{{ solicitud.estado }}">
-                            {{ solicitud.get_estado_display }}
-                        </span>
-                    </h3>
-                    <p><strong>Cliente:</strong> {{ solicitud.cliente_nombre }} · {{ solicitud.cliente_rut }}</p>
-                    <p><strong>Medicamento:</strong> {{ solicitud.medicamento }} ({{ solicitud.cantidad }})</p>
-                    <p>
-                        <strong>Revisada por:</strong> {{ solicitud.revisada_por.get_username }}
-                        · {{ solicitud.fecha_revision|date:"d/m/Y H:i" }}
-                    </p>
+                <article class="panel solicitud-historial">
+                    <div class="solicitud-historial-cabecera">
+                        <div>
+                            <span class="solicitud-folio">FOLIO #{{ solicitud.pk }}</span>
+                            <h3>{{ solicitud.medicamento }}</h3>
+                        </div>
+                        <span class="estado estado-{{ solicitud.estado }}">{{ solicitud.get_estado_display }}</span>
+                    </div>
+                    <p><strong>{{ solicitud.cliente_nombre }}</strong><span class="separador-meta">·</span>{{ solicitud.cliente_rut }}</p>
+                    <p>{{ solicitud.cantidad }} unidad(es) <span class="separador-meta">·</span> Revisada por {{ solicitud.revisada_por.get_username }}</p>
+                    <p class="fecha-historial">{{ solicitud.fecha_revision|date:"d/m/Y · H:i" }}</p>
                     {% if solicitud.respuesta %}
-                        <p><strong>Observación:</strong> {{ solicitud.respuesta }}</p>
+                        <blockquote>{{ solicitud.respuesta }}</blockquote>
                     {% endif %}
-                    <a href="{% url 'farmacia:foto_receta' solicitud.pk %}">
-                        Ver foto de la receta
-                    </a>
+                    <a class="enlace-discreto" href="{% url 'farmacia:foto_receta' solicitud.pk %}" target="_blank" rel="noopener">Consultar receta <span aria-hidden="true">↗</span></a>
                 </article>
             {% empty %}
-                <p class="panel vacio">Aún no se han revisado solicitudes.</p>
+                <p class="panel vacio vacio-compacto">A&uacute;n no hay solicitudes revisadas.</p>
             {% endfor %}
         </div>
     </section>

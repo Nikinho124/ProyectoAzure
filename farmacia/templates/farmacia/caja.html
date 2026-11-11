@@ -3,321 +3,66 @@
 
 {% block title %}Caja{% endblock %}
 
-{% block extra_style %}
-    <style>
-        .caja-layout {
-            display: grid;
-            grid-template-columns: minmax(0, 1.6fr) minmax(290px, 0.9fr);
-            align-items: start;
-            gap: 1.25rem;
-        }
-
-        .buscador-caja {
-            display: flex;
-            gap: 0.6rem;
-            margin-bottom: 1rem;
-        }
-
-        .buscador-caja input {
-            flex: 1;
-            min-width: 0;
-            min-height: 44px;
-            padding: 0.7rem 0.85rem;
-            border: 1px solid #b9cbc0;
-            border-radius: 7px;
-            color: #1d3027;
-            font: inherit;
-        }
-
-        .lista-productos {
-            display: grid;
-            gap: 0.75rem;
-        }
-
-        .producto-caja {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 1rem;
-            padding: 1rem;
-            border: 1px solid #dce7e0;
-            border-radius: 9px;
-            background: #fff;
-        }
-
-        .producto-caja h3 {
-            margin: 0 0 0.35rem;
-            color: #1c3529;
-            font-size: 1rem;
-        }
-
-        .producto-caja p {
-            margin: 0.2rem 0;
-            color: #4d6155;
-            font-size: 0.88rem;
-        }
-
-        .condicion-receta {
-            display: inline-block;
-            margin: 0.25rem 0 0.4rem;
-            padding: 0.25rem 0.5rem;
-            border-radius: 999px;
-            color: #6b4d12 !important;
-            background: #fff3d6;
-            font-size: 0.78rem !important;
-            font-weight: 700;
-        }
-
-        .condicion-receta.sin-receta {
-            color: #24533b !important;
-            background: #e7f4eb;
-        }
-
-        .agregar-producto {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            flex-shrink: 0;
-        }
-
-        .agregar-producto input {
-            width: 68px;
-            min-height: 40px;
-            padding: 0.45rem;
-            border: 1px solid #b9cbc0;
-            border-radius: 6px;
-            font: inherit;
-        }
-
-        .agregar-producto button,
-        .quitar-producto,
-        .vaciar-carrito {
-            min-height: 40px;
-            padding: 0.55rem 0.75rem;
-            border: 1px solid #176b52;
-            border-radius: 6px;
-            color: #fff;
-            background: #176b52;
-            font: inherit;
-            font-weight: 700;
-            cursor: pointer;
-        }
-
-        .agregar-producto button:disabled {
-            border-color: #9daaa1;
-            color: #36463c;
-            background: #dfe6e1;
-            cursor: not-allowed;
-        }
-
-        .carrito {
-            position: sticky;
-            top: 1rem;
-        }
-
-        .carrito h2 {
-            margin: 0 0 1rem;
-            color: #183b2e;
-            font-size: 1.2rem;
-        }
-
-        .linea-carrito {
-            display: grid;
-            grid-template-columns: 1fr auto;
-            gap: 0.45rem 0.65rem;
-            padding: 0.85rem 0;
-            border-bottom: 1px solid #e4ece6;
-        }
-
-        .linea-carrito strong {
-            color: #263a30;
-        }
-
-        .linea-carrito span {
-            color: #4d6155;
-            font-size: 0.88rem;
-        }
-
-        .quitar-producto {
-            grid-column: 1 / -1;
-            justify-self: start;
-            min-height: 32px;
-            padding: 0.35rem 0.6rem;
-            border-color: #a33a3a;
-            color: #8b3030;
-            background: #fff;
-            font-size: 0.82rem;
-        }
-
-        .vaciar-carrito {
-            margin-top: 0.8rem;
-            border-color: #a33a3a;
-            color: #8b3030;
-            background: #fff;
-        }
-
-        .total-carrito {
-            display: flex;
-            justify-content: space-between;
-            gap: 1rem;
-            margin-top: 1rem;
-            padding-top: 1rem;
-            border-top: 2px solid #dce7e0;
-            color: #183b2e;
-            font-size: 1.1rem;
-            font-weight: 700;
-        }
-
-        .aviso-caja,
-        .carrito-vacio,
-        .sin-productos {
-            color: #42574a;
-            line-height: 1.5;
-        }
-
-        .aviso-caja {
-            margin-top: 1rem;
-            padding: 0.8rem;
-            border-left: 4px solid #c18a2c;
-            border-radius: 5px;
-            background: #fff8e8;
-            font-size: 0.87rem;
-        }
-
-        .confirmar-venta {
-            width: 100%;
-            min-height: 44px;
-            margin-top: 0.8rem;
-            border: 0;
-            border-radius: 6px;
-            color: #fff;
-            background: #176b52;
-            font: inherit;
-            font-weight: 700;
-            cursor: pointer;
-        }
-
-        .medio-pago {
-            display: grid;
-            gap: 0.4rem;
-            margin-top: 1rem;
-            color: #263a30;
-            font-weight: 700;
-        }
-
-        .medio-pago select {
-            min-height: 42px;
-            padding: 0.5rem;
-            border: 1px solid #b9cbc0;
-            border-radius: 6px;
-            background: #fff;
-            color: #1d3027;
-            font: inherit;
-        }
-
-        .pagos-recientes {
-            margin-top: 1.5rem;
-        }
-
-        .pagos-recientes h2 {
-            color: #183b2e;
-        }
-
-        .pagos-recientes table {
-            width: 100%;
-            border-collapse: collapse;
-            color: #263a30;
-        }
-
-        .pagos-recientes th,
-        .pagos-recientes td {
-            padding: 0.65rem;
-            border-bottom: 1px solid #dce7e0;
-            text-align: left;
-        }
-
-        .oculto-accesible {
-            position: absolute;
-            width: 1px;
-            height: 1px;
-            padding: 0;
-            margin: -1px;
-            overflow: hidden;
-            clip: rect(0, 0, 0, 0);
-            white-space: nowrap;
-            border: 0;
-        }
-
-        @media (max-width: 850px) {
-            .caja-layout {
-                grid-template-columns: 1fr;
-            }
-
-            .carrito {
-                position: static;
-            }
-        }
-
-        @media (max-width: 580px) {
-            .producto-caja {
-                align-items: flex-start;
-                flex-direction: column;
-            }
-
-            .agregar-producto {
-                width: 100%;
-            }
-
-            .agregar-producto input {
-                flex: 0 0 70px;
-            }
-
-            .agregar-producto button {
-                flex: 1;
-            }
-        }
-    </style>
-{% endblock %}
-
 {% block content %}
-    <section class="titulo-pagina">
+    <section class="titulo-pagina portada-caja">
         <div>
+            <p class="sobretitulo">PUNTO DE VENTA <span aria-hidden="true">/</span> OPERACI&Oacute;N SEGURA</p>
             <h1>Caja</h1>
-            <p>Busca productos, confirma el medio de pago y registra una venta simulada.</p>
+            <p>Busca un producto, revisa el pedido y confirma el medio de pago.</p>
         </div>
-        <a class="boton-secundario" href="{% url 'farmacia:inicio' %}">Volver al inicio</a>
+        <a class="boton-secundario" href="{% url 'farmacia:inicio' %}"><span aria-hidden="true">←</span> Volver al resumen</a>
     </section>
 
     <div class="caja-layout">
-        <section aria-label="Buscar medicamentos">
+        <section class="catalogo-caja" aria-labelledby="titulo-catalogo-caja">
+            <div class="encabezado-seccion">
+                <div>
+                    <p class="sobretitulo">PRODUCTOS</p>
+                    <h2 id="titulo-catalogo-caja">Selecciona medicamentos</h2>
+                </div>
+                <span class="contador-productos">{{ medicamentos|length }} resultados</span>
+            </div>
             <form class="buscador-caja" method="get" role="search">
                 <label class="oculto-accesible" for="buscar-caja">Buscar por nombre o c&oacute;digo</label>
+                <span class="buscador-icono" aria-hidden="true">⌕</span>
                 <input
                     id="buscar-caja"
                     type="search"
                     name="q"
                     value="{{ busqueda }}"
-                    placeholder="Buscar medicamento o c&oacute;digo"
+                    placeholder="Buscar por nombre o c&oacute;digo..."
+                    autocomplete="off"
                 >
+                {% if busqueda %}
+                    <a class="limpiar-busqueda" href="{% url 'farmacia:caja' %}">Limpiar</a>
+                {% endif %}
                 <button class="boton-principal" type="submit">Buscar</button>
             </form>
+
             <div class="lista-productos">
                 {% for medicamento in medicamentos %}
                     <article class="producto-caja">
-                        <div>
-                            <h3>{{ medicamento.nombre }}</h3>
-                            <p>C&oacute;digo: {{ medicamento.codigo }}</p>
-                            {% if medicamento.requiere_receta %}
-                                <p class="condicion-receta">Con receta · requiere validación</p>
-                            {% else %}
-                                <p class="condicion-receta sin-receta">Sin receta</p>
-                            {% endif %}
-                            {% if medicamento.precio is not None %}
-                                <p>Precio: {{ medicamento.precio|moneda_chilena }}</p>
-                            {% else %}
-                                <p>Precio por configurar</p>
-                            {% endif %}
-                            <p>Disponibles: {{ medicamento.stock_vendible }}</p>
+                        <div class="producto-caja-info">
+                            <div class="producto-caja-titulo">
+                                <span class="producto-monograma producto-monograma-pequeno" aria-hidden="true">{{ medicamento.nombre|first|upper }}</span>
+                                <div>
+                                    <h3>{{ medicamento.nombre }}</h3>
+                                    <p class="producto-codigo">C&Oacute;DIGO {{ medicamento.codigo }}</p>
+                                </div>
+                            </div>
+                            <div class="producto-caja-detalles">
+                                {% if medicamento.requiere_receta %}
+                                    <span class="condicion-receta">Con receta</span>
+                                {% else %}
+                                    <span class="condicion-receta sin-receta">Sin receta</span>
+                                {% endif %}
+                                {% if medicamento.precio is not None %}
+                                    <span class="precio-caja">{{ medicamento.precio|moneda_chilena }}</span>
+                                {% else %}
+                                    <span class="sin-precio">Precio por configurar</span>
+                                {% endif %}
+                                <span class="existencias">{% if medicamento.stock_vendible %}{{ medicamento.stock_vendible }} disponibles{% else %}Sin stock{% endif %}</span>
+                            </div>
                         </div>
                         <form class="agregar-producto" method="post">
                             {% csrf_token %}
@@ -331,50 +76,67 @@
                                 value="1"
                                 min="1"
                                 max="{{ medicamento.stock_vendible }}"
-                                {% if medicamento.stock_vendible <= 0 %}disabled{% endif %}
+                                {% if medicamento.stock_vendible <= 0 or medicamento.requiere_receta %}disabled{% endif %}
                             >
                             <button type="submit" {% if medicamento.stock_vendible <= 0 or medicamento.requiere_receta %}disabled{% endif %}>
-                                {% if medicamento.stock_vendible <= 0 %}Sin stock{% elif medicamento.requiere_receta %}No disponible en caja{% else %}Agregar{% endif %}
+                                {% if medicamento.stock_vendible <= 0 %}Sin stock{% elif medicamento.requiere_receta %}No disponible{% else %}Agregar <span aria-hidden="true">＋</span>{% endif %}
                             </button>
                         </form>
                     </article>
                 {% empty %}
-                    <div class="panel sin-productos">
-                        No hay productos disponibles para esta b&uacute;squeda.
+                    <div class="panel vacio">
+                        <span class="vacio-icono" aria-hidden="true">⌕</span>
+                        <h3>No encontramos productos</h3>
+                        <p>Prueba con otro nombre o c&oacute;digo para continuar.</p>
+                        {% if busqueda %}<a class="enlace-discreto" href="{% url 'farmacia:caja' %}">Ver todos los productos</a>{% endif %}
                     </div>
                 {% endfor %}
             </div>
         </section>
 
         <aside class="panel carrito" aria-labelledby="titulo-carrito">
-            <h2 id="titulo-carrito">Venta en preparaci&oacute;n</h2>
-            {% for linea in productos_carrito %}
-                <div class="linea-carrito">
-                    <strong>{{ linea.medicamento.nombre }}</strong>
-                    {% if linea.subtotal is not None %}
-                        <span>{{ linea.subtotal|moneda_chilena }}</span>
-                    {% else %}
-                        <span>Precio pendiente</span>
-                    {% endif %}
-                    <span>{{ linea.cantidad }} unidad(es)</span>
-                    <form method="post">
-                        {% csrf_token %}
-                        <input type="hidden" name="accion" value="quitar">
-                        <input type="hidden" name="medicamento_id" value="{{ linea.medicamento.pk }}">
-                        <button class="quitar-producto" type="submit">Quitar</button>
-                    </form>
+            <div class="carrito-cabecera">
+                <div>
+                    <p class="sobretitulo">VENTA EN CURSO</p>
+                    <h2 id="titulo-carrito">Tu pedido</h2>
                 </div>
-            {% empty %}
-                <p class="carrito-vacio">Todav&iacute;a no hay productos agregados.</p>
-            {% endfor %}
+                <span class="carrito-unidades">{{ unidades_carrito }} <small>unid.</small></span>
+            </div>
+            <div class="lineas-carrito">
+                {% for linea in productos_carrito %}
+                    <div class="linea-carrito">
+                        <div class="linea-carrito-info">
+                            <strong>{{ linea.medicamento.nombre }}</strong>
+                            <span>{{ linea.cantidad }} unidad(es)</span>
+                        </div>
+                        {% if linea.subtotal is not None %}
+                            <span class="linea-subtotal">{{ linea.subtotal|moneda_chilena }}</span>
+                        {% else %}
+                            <span class="sin-precio">Precio pendiente</span>
+                        {% endif %}
+                        <form method="post">
+                            {% csrf_token %}
+                            <input type="hidden" name="accion" value="quitar">
+                            <input type="hidden" name="medicamento_id" value="{{ linea.medicamento.pk }}">
+                            <button class="quitar-producto" type="submit" aria-label="Quitar {{ linea.medicamento.nombre }}">Quitar</button>
+                        </form>
+                    </div>
+                {% empty %}
+                    <div class="carrito-vacio">
+                        <span class="carrito-vacio-icono" aria-hidden="true">＋</span>
+                        <strong>Tu pedido est&aacute; vac&iacute;o</strong>
+                        <p>Agrega productos del cat&aacute;logo para preparar una venta.</p>
+                    </div>
+                {% endfor %}
+            </div>
 
             {% if productos_carrito %}
                 <div class="total-carrito">
                     <span>Total estimado</span>
                     {% if carrito_tiene_precios %}
-                        <span>{{ total_carrito|moneda_chilena }}</span>
+                        <strong>{{ total_carrito|moneda_chilena }}</strong>
                     {% else %}
-                        <span>Por configurar</span>
+                        <strong>Por configurar</strong>
                     {% endif %}
                 </div>
                 {% if carrito_tiene_precios %}
@@ -383,60 +145,62 @@
                         <input type="hidden" name="accion" value="confirmar_venta">
                         <input type="hidden" name="checkout_key" value="{{ checkout_key }}">
                         <label class="medio-pago" for="medio-pago">
-                            Medio de pago simulado
+                            Medio de pago
                             <select id="medio-pago" name="medio_pago" required>
                                 {% for valor, etiqueta in medios_pago %}
                                     <option value="{{ valor }}">{{ etiqueta }}</option>
                                 {% endfor %}
                             </select>
                         </label>
-                        <button class="confirmar-venta" type="submit">
-                            Confirmar venta y descontar stock
-                        </button>
+                        <button class="confirmar-venta" type="submit">Confirmar venta y descontar stock <span aria-hidden="true">→</span></button>
                     </form>
                 {% else %}
-                    <p class="aviso-caja">
-                        Configura el precio de todos los productos para habilitar la confirmaci&oacute;n.
-                    </p>
+                    <p class="aviso-caja">Configura el precio de todos los productos para habilitar la confirmaci&oacute;n.</p>
                 {% endif %}
                 <form method="post">
                     {% csrf_token %}
                     <input type="hidden" name="accion" value="vaciar">
-                    <button class="vaciar-carrito" type="submit">Vaciar caja</button>
+                    <button class="vaciar-carrito" type="submit">Vaciar pedido</button>
                 </form>
             {% else %}
-                <p class="aviso-caja">
-                    Al agregar productos podr&aacute;s revisar cantidades y total estimado antes de avanzar.
-                </p>
+                <p class="aviso-caja aviso-seguridad">Los medicamentos con receta requieren completar primero su flujo de validaci&oacute;n y retenci&oacute;n.</p>
             {% endif %}
         </aside>
     </div>
 
     <section class="panel pagos-recientes" aria-labelledby="pagos-recientes-titulo">
-        <h2 id="pagos-recientes-titulo">Pagos simulados recientes</h2>
-        <table>
-            <thead>
-                <tr>
-                    <th>Venta</th>
-                    <th>Fecha</th>
-                    <th>Medio</th>
-                    <th>Estado</th>
-                    <th>Total</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for pago in pagos_recientes %}
+        <div class="seccion-titulo seccion-titulo-compacta">
+            <div>
+                <p class="sobretitulo">ACTIVIDAD RECIENTE</p>
+                <h2 id="pagos-recientes-titulo">Pagos simulados recientes</h2>
+            </div>
+            <span class="contador-productos">Hasta 20 registros</span>
+        </div>
+        <div class="tabla-contenedor">
+            <table>
+                <thead>
                     <tr>
-                        <td>#{{ pago.venta_caja_id }}</td>
-                        <td>{{ pago.fecha_simulacion|date:"d/m/Y H:i" }}</td>
-                        <td>{{ pago.get_medio_pago_display }}</td>
-                        <td>{{ pago.get_estado_display }}</td>
-                        <td>{{ pago.monto|moneda_chilena }}</td>
+                        <th>Venta</th>
+                        <th>Fecha y hora</th>
+                        <th>Medio de pago</th>
+                        <th>Estado</th>
+                        <th class="columna-monto">Total</th>
                     </tr>
-                {% empty %}
-                    <tr><td colspan="5">Todav&iacute;a no hay pagos registrados.</td></tr>
-                {% endfor %}
-            </tbody>
-        </table>
+                </thead>
+                <tbody>
+                    {% for pago in pagos_recientes %}
+                        <tr>
+                            <td><strong>#{{ pago.venta_caja_id }}</strong></td>
+                            <td>{{ pago.fecha_simulacion|date:"d/m/Y H:i" }}</td>
+                            <td>{{ pago.get_medio_pago_display }}</td>
+                            <td><span class="estado-pago">{{ pago.get_estado_display }}</span></td>
+                            <td class="columna-monto">{{ pago.monto|moneda_chilena }}</td>
+                        </tr>
+                    {% empty %}
+                        <tr><td class="tabla-vacia" colspan="5">Todav&iacute;a no hay ventas registradas.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
     </section>
 {% endblock %}

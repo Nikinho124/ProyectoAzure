@@ -4,143 +4,85 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#123f33">
     <title>Iniciar sesi&oacute;n | FarmaSistem</title>
-    <link rel="stylesheet" href="{% static 'farmacia/sitio.css' %}?v=1">
-    <style>
-        :root {
-            font-family: Arial, sans-serif;
-            color: #18332b;
-            background: #f4f8f6;
-        }
-
-        body {
-            display: flex;
-            min-height: 100vh;
-            flex-direction: column;
-            margin: 0;
-            align-items: center;
-        }
-
-        main {
-            width: min(100% - 2rem, 900px);
-            margin: auto;
-            padding: 2rem;
-            border: 1px solid #dce7e1;
-            border-radius: 8px;
-            background: #fff;
-            box-sizing: border-box;
-        }
-
-        h1,
-        h2 {
-            margin-top: 0;
-        }
-
-        .formularios {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-            gap: 2rem;
-        }
-
-        .panel {
-            min-width: 0;
-        }
-
-        label {
-            display: block;
-            margin: 1rem 0 0.4rem;
-            font-weight: 700;
-        }
-
-        input {
-            width: 100%;
-            min-height: 2.75rem;
-            padding: 0.6rem;
-            border: 1px solid #9eb7aa;
-            border-radius: 6px;
-            box-sizing: border-box;
-            font: inherit;
-        }
-
-        button {
-            width: 100%;
-            min-height: 2.75rem;
-            margin-top: 1.25rem;
-            border: 0;
-            border-radius: 6px;
-            color: #fff;
-            background: #176b52;
-            font: inherit;
-            font-weight: 700;
-            cursor: pointer;
-        }
-
-        .errorlist,
-        .error {
-            color: #a12727;
-        }
-
-        .mensaje {
-            padding: 0.8rem;
-            border-radius: 6px;
-            background: #eaf4ef;
-        }
-
-        .volver {
-            display: inline-block;
-            margin-top: 1rem;
-            color: #176b52;
-        }
-    </style>
+    <link rel="stylesheet" href="{% static 'farmacia/sitio.css' %}?v=3">
 </head>
-<body>
-    <main>
-        <h1>FarmaSistem</h1>
-        {% for message in messages %}
-            <p class="mensaje" role="status">{{ message }}</p>
-        {% endfor %}
-        <div class="formularios">
-            <section class="panel" aria-labelledby="titulo-login">
-                <h2 id="titulo-login">Iniciar sesi&oacute;n</h2>
-                {% if form.errors %}
-                    <p class="error" role="alert">
-                        El usuario o la contrase&ntilde;a no son correctos, o la cuenta
-                        todav&iacute;a no ha sido aprobada.
-                    </p>
-                {% endif %}
-                <form method="post" action="{% url 'login' %}">
-                    {% csrf_token %}
-                    <input type="hidden" name="next" value="{{ next }}">
-                    <label for="{{ form.username.id_for_label }}">Usuario</label>
-                    {{ form.username }}
-                    <label for="{{ form.password.id_for_label }}">Contrase&ntilde;a</label>
-                    {{ form.password }}
-                    <button type="submit">Entrar</button>
-                </form>
-            </section>
-            <section class="panel" aria-labelledby="titulo-registro">
-                <h2 id="titulo-registro">Registrarse</h2>
-                <p>Las cuentas nuevas necesitan aprobaci&oacute;n del administrador.</p>
-                <form method="post" action="{% url 'registro' %}">
-                    {% csrf_token %}
-                    {% for field in registro_form %}
-                        <label for="{{ field.id_for_label }}">{{ field.label }}</label>
-                        {{ field }}
-                        {% if field.help_text %}
-                            <small>{{ field.help_text|safe }}</small>
-                        {% endif %}
-                        {% for error in field.errors %}
-                            <p class="error" role="alert">{{ error }}</p>
+<body class="pantalla-acceso">
+    <main class="acceso-layout">
+        <aside class="acceso-presentacion">
+            <a class="marca-acceso" href="{% url 'catalogo' %}" aria-label="FarmaSistem, volver al catálogo">
+                <span class="marca-icono" aria-hidden="true">F</span>
+                <span>FarmaSistem</span>
+            </a>
+            <div class="acceso-mensaje">
+                <p class="acceso-eyebrow">GESTI&Oacute;N FARMAC&Eacute;UTICA</p>
+                <h1>Un espacio claro para cuidar mejor.</h1>
+                <p>Accede a las herramientas de farmacia o crea tu cuenta para continuar.</p>
+            </div>
+            <div class="acceso-nota">
+                <span class="acceso-nota-icono" aria-hidden="true">✓</span>
+                <p>Las cuentas profesionales requieren aprobaci&oacute;n antes de habilitar el acceso.</p>
+            </div>
+        </aside>
+
+        <div class="acceso-contenido">
+            <div class="acceso-encabezado">
+                <p class="sobretitulo">BIENVENIDO A FARMASISTEM</p>
+                <h2>Acceso a tu cuenta</h2>
+                <p>Ingresa tus credenciales o env&iacute;a una solicitud de registro.</p>
+            </div>
+            {% for message in messages %}
+                <p class="mensaje" role="status">{{ message }}</p>
+            {% endfor %}
+
+            <div class="formularios">
+                <section class="panel-acceso" aria-labelledby="titulo-login">
+                    <span class="numero-formulario" aria-hidden="true">01</span>
+                    <h3 id="titulo-login">Iniciar sesi&oacute;n</h3>
+                    <p class="descripcion-formulario">Contin&uacute;a con tu cuenta activa.</p>
+                    {% if form.errors %}
+                        <p class="error acceso-error" role="alert">
+                            El usuario o la contrase&ntilde;a no son correctos, o la cuenta
+                            todav&iacute;a no ha sido aprobada.
+                        </p>
+                    {% endif %}
+                    <form method="post" action="{% url 'login' %}">
+                        {% csrf_token %}
+                        <input type="hidden" name="next" value="{{ next }}">
+                        <label for="{{ form.username.id_for_label }}">Usuario</label>
+                        {{ form.username }}
+                        <label for="{{ form.password.id_for_label }}">Contrase&ntilde;a</label>
+                        {{ form.password }}
+                        <button class="boton-acceso" type="submit">Entrar a FarmaSistem <span aria-hidden="true">→</span></button>
+                    </form>
+                </section>
+
+                <section class="panel-acceso panel-registro" aria-labelledby="titulo-registro">
+                    <span class="numero-formulario" aria-hidden="true">02</span>
+                    <h3 id="titulo-registro">Registrarse</h3>
+                    <p class="descripcion-formulario">Las cuentas profesionales necesitan aprobaci&oacute;n.</p>
+                    <form method="post" action="{% url 'registro' %}">
+                        {% csrf_token %}
+                        {% for field in registro_form %}
+                            <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+                            {{ field }}
+                            {% if field.help_text %}
+                                <small class="ayuda-campo">{{ field.help_text|safe }}</small>
+                            {% endif %}
+                            {% for error in field.errors %}
+                                <p class="error acceso-error" role="alert">{{ error }}</p>
+                            {% endfor %}
                         {% endfor %}
-                    {% endfor %}
-                    {% for error in registro_form.non_field_errors %}
-                        <p class="error" role="alert">{{ error }}</p>
-                    {% endfor %}
-                    <button type="submit">Enviar solicitud</button>
-                </form>
-            </section>
+                        {% for error in registro_form.non_field_errors %}
+                            <p class="error acceso-error" role="alert">{{ error }}</p>
+                        {% endfor %}
+                        <button class="boton-acceso boton-registro" type="submit">Enviar solicitud</button>
+                    </form>
+                </section>
+            </div>
+            <a class="volver-acceso" href="{% url 'catalogo' %}"><span aria-hidden="true">←</span> Volver al cat&aacute;logo</a>
         </div>
-        <a class="volver" href="{% url 'catalogo' %}">Volver al cat&aacute;logo</a>
     </main>
     {% include "farmacia/includes/pie_pagina.html" %}
 </body>

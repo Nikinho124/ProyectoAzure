@@ -32,6 +32,12 @@ from farmacia.models import (
 from farmacia.receta_forms import SolicitudRevisionRecetaForm
 
 
+def _quitar_autofocus(*formularios):
+    for formulario in formularios:
+        for campo in formulario.fields.values():
+            campo.widget.attrs.pop("autofocus", None)
+
+
 class IniciarSesionView(LoginView):
     template_name = "farmacia/login.html"
 
@@ -45,6 +51,7 @@ class IniciarSesionView(LoginView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context.setdefault("registro_form", RegistroUsuarioForm())
+        _quitar_autofocus(context["form"], context["registro_form"])
         return context
 
 
@@ -69,11 +76,13 @@ def registrar_usuario(request):
             )
         return redirect("login")
 
+    form = AuthenticationForm(request=request)
+    _quitar_autofocus(form, registro_form)
     return render(
         request,
         "farmacia/login.html",
         {
-            "form": AuthenticationForm(request=request),
+            "form": form,
             "registro_form": registro_form,
         },
         status=400,
@@ -275,6 +284,9 @@ def inicio_farmacia(request):
             "medicamentos": medicamentos.order_by("nombre"),
             "total_medicamentos": medicamentos.count(),
             "total_disponibles": disponibles.count(),
+            "recetas_pendientes": SolicitudRevisionReceta.objects.filter(
+                estado=SolicitudRevisionReceta.Estado.PENDIENTE
+            ).count(),
         },
     )
 

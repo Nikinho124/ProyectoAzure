@@ -1,45 +1,105 @@
 {% extends "admin/index.html" %}
 {% load i18n %}
 
+{% block content_title %}{% endblock %}
+
 {% block content %}
+    <header class="farmacia-panel-intro">
+        <div>
+            <p class="panel-eyebrow">FARMASISTEM <span aria-hidden="true">/</span> SUPERVISI&Oacute;N</p>
+            <h1>Control de farmacia</h1>
+            <p>Inventario, vencimientos y accesos profesionales en una sola vista.</p>
+        </div>
+        <a class="panel-cta" href="{{ resumen_farmacia.enlaces.caja }}">
+            <span class="panel-cta-icono" aria-hidden="true">＋</span>
+            <span>Abrir Caja<small>Ir al punto de venta</small></span>
+            <span class="panel-cta-flecha" aria-hidden="true">→</span>
+        </a>
+    </header>
+
     <section class="panel resumen-panel" aria-labelledby="titulo-resumen">
-        <h2 id="titulo-resumen">Resumen de inventario</h2>
+        <div class="panel-seccion-cabecera">
+            <div>
+                <p class="panel-eyebrow">ESTADO OPERACIONAL</p>
+                <h2 id="titulo-resumen">Resumen de inventario</h2>
+            </div>
+            <span class="panel-actualizado"><span aria-hidden="true">●</span> Datos actuales</span>
+        </div>
         <div class="resumen-tarjetas">
             <a class="tarjeta" href="{{ resumen_farmacia.enlaces.medicamentos }}">
+                <span class="tarjeta-indicador" aria-hidden="true">▦</span>
                 <span class="tarjeta-numero">{{ resumen_farmacia.medicamentos_activos }}</span>
                 <span class="tarjeta-etiqueta">Medicamentos activos</span>
+                <span class="tarjeta-ayuda">Administrar cat&aacute;logo <span aria-hidden="true">→</span></span>
             </a>
             <a class="tarjeta alerta" href="{{ resumen_farmacia.enlaces.medicamentos }}?stock=bajo">
+                <span class="tarjeta-indicador" aria-hidden="true">!</span>
                 <span class="tarjeta-numero">{{ resumen_farmacia.stock_bajo }}</span>
-                <span class="tarjeta-etiqueta">En stock mínimo o bajo</span>
+                <span class="tarjeta-etiqueta">En stock m&iacute;nimo o bajo</span>
+                <span class="tarjeta-ayuda">Revisar disponibilidad <span aria-hidden="true">→</span></span>
             </a>
             <a class="tarjeta alerta" href="{{ resumen_farmacia.enlaces.ingresos }}?vencimiento=vencido">
+                <span class="tarjeta-indicador" aria-hidden="true">!</span>
                 <span class="tarjeta-numero">{{ resumen_farmacia.vencidos }}</span>
                 <span class="tarjeta-etiqueta">Lotes vencidos con stock</span>
+                <span class="tarjeta-ayuda">Revisar lotes <span aria-hidden="true">→</span></span>
             </a>
             <a class="tarjeta advertencia" href="{{ resumen_farmacia.enlaces.ingresos }}?vencimiento=30">
+                <span class="tarjeta-indicador" aria-hidden="true">⌁</span>
                 <span class="tarjeta-numero">{{ resumen_farmacia.por_vencer }}</span>
                 <span class="tarjeta-etiqueta">Vencen en los pr&oacute;ximos 30 d&iacute;as</span>
+                <span class="tarjeta-ayuda">Planificar rotaci&oacute;n <span aria-hidden="true">→</span></span>
             </a>
-            <a class="tarjeta" href="{{ resumen_farmacia.enlaces.solicitudes }}">
-                <span class="tarjeta-numero">{{ resumen_farmacia.quimicos_pendientes }}</span>
-                <span class="tarjeta-etiqueta">Solicitudes de qu&iacute;micos pendientes</span>
-            </a>
+            {% if user.is_superuser %}
+                <a class="tarjeta" href="{{ resumen_farmacia.enlaces.solicitudes }}">
+                    <span class="tarjeta-indicador" aria-hidden="true">◇</span>
+                    <span class="tarjeta-numero">{{ resumen_farmacia.quimicos_pendientes }}</span>
+                    <span class="tarjeta-etiqueta">Solicitudes de químicos pendientes</span>
+                    <span class="tarjeta-ayuda">Ver solicitudes <span aria-hidden="true">→</span></span>
+                </a>
+            {% endif %}
         </div>
     </section>
 
     <section class="panel accesos-panel" aria-labelledby="titulo-accesos">
-        <h2 id="titulo-accesos">Accesos r&aacute;pidos</h2>
+        <div class="panel-seccion-cabecera">
+            <div>
+                <p class="panel-eyebrow">GESTI&Oacute;N DIARIA</p>
+                <h2 id="titulo-accesos">Accesos r&aacute;pidos</h2>
+            </div>
+        </div>
         <div class="accesos-rapidos">
-            <a class="acceso acceso-caja" href="{{ resumen_farmacia.enlaces.caja }}">Abrir Caja</a>
-            <a class="acceso" href="{{ resumen_farmacia.enlaces.ingresos }}">Registrar o revisar ingresos</a>
-            <a class="acceso" href="{{ resumen_farmacia.enlaces.mermas }}">Registrar o revisar mermas</a>
-            <a class="acceso" href="{{ resumen_farmacia.enlaces.medicamentos }}">Administrar cat&aacute;logo y stock m&iacute;nimo</a>
-            <a class="acceso" href="{{ resumen_farmacia.enlaces.solicitudes }}">Revisar solicitudes de qu&iacute;micos</a>
+            <a class="acceso acceso-caja" href="{{ resumen_farmacia.enlaces.caja }}">
+                <span class="acceso-icono" aria-hidden="true">＋</span>
+                <span>Abrir Caja<small>Registrar una venta</small></span>
+                <span class="acceso-flecha" aria-hidden="true">→</span>
+            </a>
+            <a class="acceso" href="{{ resumen_farmacia.enlaces.ingresos }}">
+                <span class="acceso-icono" aria-hidden="true">↓</span>
+                <span>Registrar o revisar ingresos<small>Controlar lotes y vencimientos</small></span>
+                <span class="acceso-flecha" aria-hidden="true">→</span>
+            </a>
+            <a class="acceso" href="{{ resumen_farmacia.enlaces.mermas }}">
+                <span class="acceso-icono" aria-hidden="true">↗</span>
+                <span>Registro de mermas<small>Consultar trazabilidad</small></span>
+                <span class="acceso-flecha" aria-hidden="true">→</span>
+            </a>
+            <a class="acceso" href="{{ resumen_farmacia.enlaces.medicamentos }}">
+                <span class="acceso-icono" aria-hidden="true">▦</span>
+                <span>Cat&aacute;logo y stock m&iacute;nimo<small>Administrar medicamentos</small></span>
+                <span class="acceso-flecha" aria-hidden="true">→</span>
+            </a>
+            {% if user.is_superuser %}
+                <a class="acceso" href="{{ resumen_farmacia.enlaces.solicitudes }}">
+                    <span class="acceso-icono" aria-hidden="true">◇</span>
+                    <span>Solicitudes profesionales<small>Revisar accesos pendientes</small></span>
+                    <span class="acceso-flecha" aria-hidden="true">→</span>
+                </a>
+            {% endif %}
         </div>
         <p class="nota-inventario">
-            Los ingresos y las mermas quedan como registros de control. Para mantener la trazabilidad,
-            no se pueden modificar ni eliminar despu&eacute;s de guardarlos.
+            <span class="nota-icono" aria-hidden="true">i</span>
+            Los ingresos y las mermas quedan como registros de control y no se pueden modificar ni eliminar despu&eacute;s de guardarlos.
         </p>
     </section>
 
