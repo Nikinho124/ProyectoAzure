@@ -439,19 +439,37 @@ class VentaRecetaRetenidaAdmin(admin.ModelAdmin):
     list_display = (
         "fecha_registro",
         "cliente_rut",
-        "medicamento",
+        "medicamento_columna",
         "cantidad",
         "auditor_qf",
         "estado",
+        "revisado_por",
+        "jefe_farmacia",
+        "fecha_resolucion",
     )
     list_filter = ("estado", "fecha_registro")
-    search_fields = ("cliente_rut", "medicamento", "medico_prescriptor")
-    list_select_related = ("auditor_qf",)
+    search_fields = (
+        "cliente_rut",
+        "medicamento__nombre",
+        "medicamento__codigo",
+        "medicamento_legado",
+        "medico_prescriptor",
+    )
+    list_select_related = (
+        "auditor_qf",
+        "revisado_por",
+        "jefe_farmacia",
+        "medicamento",
+    )
     readonly_fields = tuple(field.name for field in VentaRecetaRetenida._meta.fields)
     date_hierarchy = "fecha_registro"
 
     def has_add_permission(self, request):
         return False
+
+    @admin.display(description="Medicamento")
+    def medicamento_columna(self, obj):
+        return obj.medicamento or obj.medicamento_legado or "Sin vincular"
 
     def has_delete_permission(self, request, obj=None):
         return False

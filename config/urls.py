@@ -40,3 +40,6 @@ urlpatterns = [
     path('farmacia/', include('farmacia.urls')),
     path('admin/', farmacia_admin_site.urls),
 ]
+
+handler404 = "config.error_handlers.handler404"
+handler500 = "config.error_handlers.handler500"

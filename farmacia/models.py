@@ -1,10 +1,11 @@
 import re
 import uuid
+from os.path import splitext
 
 from django.conf import settings
 from django.contrib.auth.models import Group
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.core.validators import MinValueValidator
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models, transaction
 from django.db.models import F, Q, Sum
 from django.utils import timezone
@@ -14,6 +15,21 @@ from farmacia.storage import PrivatePrescriptionStorage
 
 GRUPO_FARMACEUTICO = "Auditor_QF"
 GRUPO_JEFE_FARMACIA = "Jefe de Farmacia"
+MAX_UNIDADES_POR_RECETA = 6
+MAX_POSITIVE_INTEGER = 2_147_483_647
+MAX_POSITIVE_SMALL_INTEGER = 32_767
+MAX_RECETA_UPLOAD_BYTES = 5 * 1024 * 1024
+EXTENSIONES_RECETA_PERMITIDAS = {".jpg", ".jpeg", ".png"}
+
+
+def validar_archivo_receta(archivo):
+    if archivo.size > MAX_RECETA_UPLOAD_BYTES:
+        raise ValidationError("La imagen de la receta no puede superar los 5 MB.")
+    extension = splitext(archivo.name)[1].lower()
+    if extension not in EXTENSIONES_RECETA_PERMITIDAS:
+        raise ValidationError(
+            "La imagen de la receta debe tener extensión .jpg, .jpeg o .png."
+        )
 
 
 def validar_rut_chileno(value):
@@ -38,20 +54,40 @@ class VentaRecetaRetenida(models.Model):
         APROBADA = "aprobada", "Aprobada"
         RECHAZADA = "rechazada", "Rechazada"
         BLOQUEADA = "bloqueada", "Bloqueada"
+        DISPENSADA = "dispensada", "Dispensada"
 
     cliente_rut = models.CharField(
         "RUT del cliente",
         max_length=12,
         validators=[validar_rut_chileno],
     )
-    medicamento = models.CharField("Medicamento", max_length=200)
+    medicamento = models.ForeignKey(
+        "Medicamento",
+        on_delete=models.PROTECT,
+        related_name="recetas_retenidas",
+        limit_choices_to={"activo": True, "requiere_receta": True},
+        null=True,
+        blank=True,
+        verbose_name="Medicamento",
+    )
+    medicamento_legado = models.CharField(
+        "Nombre histórico del medicamento",
+        max_length=200,
+        blank=True,
+        editable=False,
+    )
     cantidad = models.PositiveSmallIntegerField(
         "Cantidad",
-        validators=[MinValueValidator(1)],
+        validators=[
+            MinValueValidator(1),
+            MaxValueValidator(MAX_POSITIVE_SMALL_INTEGER),
+        ],
     )
     foto_receta = models.ImageField(
         "Foto de la receta",
         upload_to="recetas_retenidas/%Y/%m/",
+        storage=PrivatePrescriptionStorage(),
+        validators=[validar_archivo_receta],
     )
     medico_prescriptor = models.CharField("Médico prescriptor", max_length=200)
     auditor_qf = models.ForeignKey(
@@ -67,7 +103,41 @@ class VentaRecetaRetenida(models.Model):
         choices=Estado.choices,
         default=Estado.PENDIENTE_REVISION,
     )
+    jefe_farmacia = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="ventas_recetas_retenidas_resueltas",
+        null=True,
+        blank=True,
+        verbose_name="Jefe de Farmacia que revisó",
+    )
+    revisado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="recetas_retenidas_revisadas",
+        null=True,
+        blank=True,
+        verbose_name="Revisado por",
+    )
+    venta_caja = models.ForeignKey(
+        "VentaCaja",
+        on_delete=models.PROTECT,
+        related_name="recetas_retenidas",
+        null=True,
+        blank=True,
+        verbose_name="Venta de caja",
+    )
+    observacion_resolucion = models.CharField(
+        "Observación de la resolución",
+        max_length=2000,
+        blank=True,
+    )
     fecha_registro = models.DateTimeField("Fecha de registro", auto_now_add=True)
+    fecha_resolucion = models.DateTimeField(
+        "Fecha de resolución",
+        null=True,
+        blank=True,
+    )
     eliminado_en = models.DateTimeField(
         "Eliminado en",
         null=True,
@@ -88,17 +158,157 @@ class VentaRecetaRetenida(models.Model):
 
     def clean(self):
         super().clean()
+        if self._state.adding and not self.medicamento_id:
+            raise ValidationError(
+                {"medicamento": "Selecciona un medicamento del catálogo."}
+            )
+        if self.medicamento_id and (
+            not self.medicamento.activo or not self.medicamento.requiere_receta
+        ):
+            raise ValidationError(
+                {"medicamento": "La receta debe corresponder a un medicamento activo que la requiera."}
+            )
         if self.auditor_qf_id and not self.auditor_qf.groups.filter(
-            name="Auditor_QF"
+            name=GRUPO_FARMACEUTICO
         ).exists():
             raise ValidationError(
                 {"auditor_qf": "El usuario debe pertenecer al grupo Auditor_QF."}
             )
+        if self.jefe_farmacia_id and not (
+            self.jefe_farmacia.is_superuser
+            or self.jefe_farmacia.groups.filter(
+                name=GRUPO_JEFE_FARMACIA
+            ).exists()
+        ):
+            raise ValidationError(
+                {"jefe_farmacia": "El usuario debe pertenecer al grupo Jefe de Farmacia."}
+            )
+        if self.revisado_por_id and not (
+            self.revisado_por.is_superuser
+            or self.revisado_por.groups.filter(
+                name__in=(GRUPO_FARMACEUTICO, GRUPO_JEFE_FARMACIA)
+            ).exists()
+        ):
+            raise ValidationError(
+                {"revisado_por": "El usuario no tiene un rol habilitado para revisar recetas."}
+            )
+        if (
+            self.revisado_por_id
+            and not self.revisado_por.is_superuser
+            and self.revisado_por.groups.filter(
+                name=GRUPO_FARMACEUTICO
+            ).exists()
+            and self.revisado_por_id != self.auditor_qf_id
+        ):
+            raise ValidationError(
+                {"revisado_por": "Auditor_QF solo puede aprobar sus propias recetas."}
+            )
+
+    def save(self, *args, **kwargs):
+        if self._state.adding:
+            self.full_clean()
+        super().save(*args, **kwargs)
 
     def eliminar_logicamente(self):
         if self.eliminado_en is None:
             self.eliminado_en = timezone.now()
             self.save(update_fields=("eliminado_en",))
+
+    def aprobar(self, revisor):
+        es_jefe = (
+            revisor.is_superuser
+            or revisor.groups.filter(name=GRUPO_JEFE_FARMACIA).exists()
+        )
+        es_auditor_propio = (
+            revisor.groups.filter(name=GRUPO_FARMACEUTICO).exists()
+            and self.auditor_qf_id == revisor.pk
+        )
+        if not (es_jefe or es_auditor_propio):
+            raise PermissionDenied(
+                "Solo Auditor_QF o el Jefe de Farmacia pueden aprobar una receta."
+            )
+
+        with transaction.atomic():
+            venta = type(self).objects.select_for_update().get(pk=self.pk)
+            if venta.estado != self.Estado.PENDIENTE_REVISION:
+                raise ValidationError("Esta receta ya fue revisada.")
+            if venta.cantidad > MAX_UNIDADES_POR_RECETA and not (
+                venta.autorizaciones_excepcionales.filter(
+                    tipo=AutorizacionExcepcional.Tipo.TOPE_MEDICAMENTOS,
+                    estado=AutorizacionExcepcional.Estado.APROBADA,
+                ).exists()
+            ):
+                raise ValidationError(
+                    "La cantidad supera el máximo de 6 unidades. "
+                    "Se requiere aprobar primero la excepción."
+                )
+
+            fecha = timezone.now()
+            type(self).objects.filter(
+                pk=venta.pk,
+                estado=self.Estado.PENDIENTE_REVISION,
+            ).update(
+                estado=self.Estado.APROBADA,
+                jefe_farmacia=revisor if es_jefe else None,
+                revisado_por=revisor,
+                fecha_resolucion=fecha,
+            )
+            self.estado = self.Estado.APROBADA
+            self.jefe_farmacia = revisor if es_jefe else None
+            self.revisado_por = revisor
+            self.fecha_resolucion = fecha
+
+    def rechazar(self, jefe, observacion):
+        if not (
+            jefe.is_superuser
+            or jefe.groups.filter(name=GRUPO_JEFE_FARMACIA).exists()
+        ):
+            raise PermissionDenied(
+                "Solo el Jefe de Farmacia puede rechazar una receta."
+            )
+        observacion = (observacion or "").strip()
+        if not observacion:
+            raise ValidationError(
+                {"observacion_resolucion": "Indica el motivo del rechazo."}
+            )
+        if len(observacion) > 2000:
+            raise ValidationError(
+                {
+                    "observacion_resolucion": (
+                        "La observación no puede superar los 2000 caracteres."
+                    )
+                }
+            )
+
+        with transaction.atomic():
+            venta = type(self).objects.select_for_update().get(pk=self.pk)
+            if venta.estado != self.Estado.PENDIENTE_REVISION:
+                raise ValidationError("Esta receta ya fue revisada.")
+
+            fecha = timezone.now()
+            type(self).objects.filter(
+                pk=venta.pk,
+                estado=self.Estado.PENDIENTE_REVISION,
+            ).update(
+                estado=self.Estado.RECHAZADA,
+                jefe_farmacia=jefe,
+                revisado_por=jefe,
+                observacion_resolucion=observacion,
+                fecha_resolucion=fecha,
+            )
+            venta.autorizaciones_excepcionales.filter(
+                estado=AutorizacionExcepcional.Estado.PENDIENTE
+            ).update(
+                estado=AutorizacionExcepcional.Estado.RECHAZADA,
+                jefe_farmacia=jefe,
+                respuesta_jefe=observacion,
+                fecha_resolucion=fecha,
+            )
+            self.estado = self.Estado.RECHAZADA
+            self.jefe_farmacia = jefe
+            self.revisado_por = jefe
+            self.observacion_resolucion = observacion
+            self.fecha_resolucion = fecha
 
     def __str__(self):
         return f"Venta #{self.pk} - {self.cliente_rut}"
@@ -239,7 +449,10 @@ class DetalleVentaCaja(models.Model):
     )
     cantidad = models.PositiveIntegerField(
         "Cantidad vendida",
-        validators=[MinValueValidator(1)],
+        validators=[
+            MinValueValidator(1),
+            MaxValueValidator(MAX_POSITIVE_INTEGER),
+        ],
     )
     precio_unitario = models.DecimalField(
         "Precio unitario al vender",
@@ -288,7 +501,7 @@ class AutorizacionExcepcional(models.Model):
         verbose_name="Venta",
     )
     tipo = models.CharField("Tipo de excepción", max_length=24, choices=Tipo.choices)
-    motivo = models.TextField("Motivo de la solicitud")
+    motivo = models.TextField("Motivo de la solicitud", max_length=2000)
     solicitada_por = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
@@ -313,7 +526,11 @@ class AutorizacionExcepcional(models.Model):
         blank=True,
         verbose_name="Jefe de Farmacia que resuelve",
     )
-    respuesta_jefe = models.TextField("Respuesta del Jefe de Farmacia", blank=True)
+    respuesta_jefe = models.TextField(
+        "Respuesta del Jefe de Farmacia",
+        max_length=2000,
+        blank=True,
+    )
     fecha_solicitud = models.DateTimeField("Fecha de solicitud", auto_now_add=True)
     fecha_resolucion = models.DateTimeField(
         "Fecha de resolución",
@@ -346,6 +563,9 @@ class AutorizacionExcepcional(models.Model):
     def clean(self):
         super().clean()
         errores = {}
+        self.motivo = (self.motivo or "").strip()
+        if not self.motivo:
+            errores["motivo"] = "Describe por qué se solicita la excepción."
         if self.solicitada_por_id and not self.solicitada_por.groups.filter(
             name="Auditor_QF"
         ).exists():
@@ -369,6 +589,59 @@ class AutorizacionExcepcional(models.Model):
             )
         if errores:
             raise ValidationError(errores)
+
+    def resolver(self, jefe, aprobado, respuesta=""):
+        if not (
+            jefe.is_superuser
+            or jefe.groups.filter(name=GRUPO_JEFE_FARMACIA).exists()
+        ):
+            raise PermissionDenied(
+                "Solo el Jefe de Farmacia puede resolver excepciones."
+            )
+        respuesta = (respuesta or "").strip()
+        if len(respuesta) > 2000:
+            raise ValidationError(
+                {"respuesta_jefe": "La respuesta no puede superar los 2000 caracteres."}
+            )
+        if not aprobado and not respuesta:
+            raise ValidationError(
+                {"respuesta_jefe": "Indica el motivo por el que rechazas la excepción."}
+            )
+
+        with transaction.atomic():
+            venta = VentaRecetaRetenida.objects.select_for_update().get(
+                pk=self.venta_id
+            )
+            autorizacion = type(self).objects.select_for_update().get(pk=self.pk)
+            if autorizacion.estado != self.Estado.PENDIENTE:
+                raise ValidationError("Esta excepción ya fue resuelta.")
+            if venta.estado != VentaRecetaRetenida.Estado.PENDIENTE_REVISION:
+                raise ValidationError("La receta ya no está pendiente de revisión.")
+
+            estado = self.Estado.APROBADA if aprobado else self.Estado.RECHAZADA
+            fecha = timezone.now()
+            type(self).objects.filter(
+                pk=autorizacion.pk,
+                estado=self.Estado.PENDIENTE,
+            ).update(
+                estado=estado,
+                jefe_farmacia=jefe,
+                respuesta_jefe=respuesta,
+                fecha_resolucion=fecha,
+            )
+            if not aprobado:
+                VentaRecetaRetenida.objects.filter(pk=venta.pk).update(
+                    estado=VentaRecetaRetenida.Estado.RECHAZADA,
+                    jefe_farmacia=jefe,
+                    revisado_por=jefe,
+                    observacion_resolucion=respuesta,
+                    fecha_resolucion=fecha,
+                )
+
+            self.estado = estado
+            self.jefe_farmacia = jefe
+            self.respuesta_jefe = respuesta
+            self.fecha_resolucion = fecha
 
     def __str__(self):
         return f"Excepción #{self.pk} - venta #{self.venta_id} ({self.get_estado_display()})"
@@ -483,6 +756,7 @@ class Medicamento(models.Model):
     stock_minimo = models.PositiveIntegerField(
         "Stock mínimo",
         default=5,
+        validators=[MaxValueValidator(MAX_POSITIVE_INTEGER)],
         help_text="Se mostrará una alerta cuando el stock disponible llegue a este valor.",
     )
     activo = models.BooleanField("Activo en el catálogo", default=True)
@@ -523,12 +797,16 @@ class IngresoInventario(models.Model):
     lote = models.CharField("Número de lote", max_length=100)
     cantidad = models.PositiveIntegerField(
         "Cantidad recibida",
-        validators=[MinValueValidator(1)],
+        validators=[
+            MinValueValidator(1),
+            MaxValueValidator(MAX_POSITIVE_INTEGER),
+        ],
     )
     stock_disponible = models.PositiveIntegerField(
         "Stock disponible",
         default=0,
         editable=False,
+        validators=[MaxValueValidator(MAX_POSITIVE_INTEGER)],
     )
     fecha_vencimiento = models.DateField("Fecha de vencimiento")
     proveedor = models.CharField("Proveedor", max_length=200, blank=True)
@@ -605,10 +883,13 @@ class Merma(models.Model):
     )
     cantidad = models.PositiveIntegerField(
         "Cantidad mermada",
-        validators=[MinValueValidator(1)],
+        validators=[
+            MinValueValidator(1),
+            MaxValueValidator(MAX_POSITIVE_INTEGER),
+        ],
     )
     motivo = models.CharField("Motivo", max_length=12, choices=Motivo.choices)
-    observacion = models.TextField("Observación", blank=True)
+    observacion = models.TextField("Observación", max_length=2000)
     fecha_registro = models.DateTimeField("Fecha de registro", auto_now_add=True)
     registrado_por = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -630,6 +911,16 @@ class Merma(models.Model):
 
     def clean(self):
         super().clean()
+        self.observacion = (self.observacion or "").strip()
+        if not self.observacion:
+            raise ValidationError(
+                {
+                    "observacion": (
+                        "Describe el motivo de la merma (por ejemplo, "
+                        "vencimiento o daño)."
+                    )
+                }
+            )
         if not self.ingreso_id or not self.cantidad:
             return
 

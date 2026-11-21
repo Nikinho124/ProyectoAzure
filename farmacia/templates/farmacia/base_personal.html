@@ -22,6 +22,9 @@
             <a href="{% url 'farmacia:caja' %}" {% if request.resolver_match.url_name == "caja" %}aria-current="page"{% endif %}>
                 <span class="nav-indicador" aria-hidden="true"></span>Caja
             </a>
+            <a href="{% url 'farmacia:recetas_retenidas' %}" {% if request.resolver_match.url_name == "recetas_retenidas" %}aria-current="page"{% endif %}>
+                <span class="nav-indicador" aria-hidden="true"></span>Recetas retenidas
+            </a>
             <a href="{% url 'farmacia:consultas_jefe' %}" {% if request.resolver_match.url_name == "consultas_jefe" %}aria-current="page"{% endif %}>
                 <span class="nav-indicador" aria-hidden="true"></span>Consultas al Jefe
             </a>

@@ -1,17 +1,26 @@
+from os.path import splitext
+
 from django import forms
 
 from farmacia.models import ConsultaJefeFarmacia
 
 
-MAX_RECETA_UPLOAD_BYTES = 10 * 1024 * 1024
+MAX_RECETA_UPLOAD_BYTES = 5 * 1024 * 1024
 MAX_RECETA_IMAGE_PIXELS = 40_000_000
+EXTENSIONES_RECETA_PERMITIDAS = {".jpg", ".jpeg", ".png"}
 
 
 class RecetaImageField(forms.ImageField):
     def to_python(self, data):
+        extension = splitext(getattr(data, "name", ""))[1].lower() if data else ""
+        if data and extension not in EXTENSIONES_RECETA_PERMITIDAS:
+            raise forms.ValidationError(
+                "La imagen de la receta debe tener extensión .jpg, .jpeg o .png.",
+                code="invalid_image_extension",
+            )
         if data and getattr(data, "size", 0) > MAX_RECETA_UPLOAD_BYTES:
             raise forms.ValidationError(
-                "La imagen no puede superar los 10 MB.",
+                "La imagen de la receta no puede superar los 5 MB.",
                 code="image_too_large",
             )
 
@@ -33,7 +42,9 @@ class ConsultaJefeFarmaciaForm(forms.ModelForm):
     foto_receta = RecetaImageField(
         label="Foto de la receta",
         help_text="Sube una imagen legible de la receta para que el Jefe de Farmacia la revise.",
-        widget=forms.ClearableFileInput(attrs={"accept": "image/jpeg,image/png,image/webp"}),
+        widget=forms.ClearableFileInput(
+            attrs={"accept": "image/jpeg,image/png,.jpg,.jpeg,.png"}
+        ),
     )
 
     class Meta:
@@ -54,8 +65,8 @@ class ConsultaJefeFarmaciaForm(forms.ModelForm):
 
     def clean_foto_receta(self):
         foto = self.cleaned_data["foto_receta"]
-        if foto.image.format not in {"JPEG", "PNG", "WEBP"}:
-            raise forms.ValidationError("Sube una imagen JPG, PNG o WEBP válida.")
-        extension = {"JPEG": "jpg", "PNG": "png", "WEBP": "webp"}[foto.image.format]
+        if foto.image.format not in {"JPEG", "PNG"}:
+            raise forms.ValidationError("Sube una imagen JPG o PNG válida.")
+        extension = {"JPEG": "jpg", "PNG": "png"}[foto.image.format]
         foto.name = f"receta.{extension}"
         return foto

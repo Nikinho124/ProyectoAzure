@@ -13,6 +13,8 @@
         <a class="boton-secundario" href="{% url 'farmacia:inicio' %}"><span aria-hidden="true">←</span> Volver al resumen</a>
     </section>
 
+    <p id="caja-feedback" class="mensaje error" role="alert" aria-live="assertive" hidden></p>
+
     <div class="caja-layout">
         <section class="catalogo-caja" aria-labelledby="titulo-catalogo-caja">
             <div class="encabezado-seccion">
@@ -64,10 +66,22 @@
                                 <span class="existencias">{% if medicamento.stock_vendible %}{{ medicamento.stock_vendible }} disponibles{% else %}Sin stock{% endif %}</span>
                             </div>
                         </div>
-                        <form class="agregar-producto" method="post">
+                        <form class="agregar-producto" method="post" data-json-response>
                             {% csrf_token %}
                             <input type="hidden" name="accion" value="agregar">
                             <input type="hidden" name="medicamento_id" value="{{ medicamento.pk }}">
+                            {% if medicamento.requiere_receta %}
+                                <label class="oculto-accesible" for="receta-{{ medicamento.pk }}">Folio de receta aprobada para {{ medicamento.nombre }}</label>
+                                <input
+                                    id="receta-{{ medicamento.pk }}"
+                                    type="number"
+                                    name="receta_id"
+                                    min="1"
+                                    placeholder="Folio receta"
+                                    required
+                                    {% if medicamento.stock_vendible <= 0 %}disabled{% endif %}
+                                >
+                            {% endif %}
                             <label class="oculto-accesible" for="cantidad-{{ medicamento.pk }}">Cantidad de {{ medicamento.nombre }}</label>
                             <input
                                 id="cantidad-{{ medicamento.pk }}"
@@ -76,10 +90,10 @@
                                 value="1"
                                 min="1"
                                 max="{{ medicamento.stock_vendible }}"
-                                {% if medicamento.stock_vendible <= 0 or medicamento.requiere_receta %}disabled{% endif %}
+                                {% if medicamento.stock_vendible <= 0 %}disabled{% endif %}
                             >
-                            <button type="submit" {% if medicamento.stock_vendible <= 0 or medicamento.requiere_receta %}disabled{% endif %}>
-                                {% if medicamento.stock_vendible <= 0 %}Sin stock{% elif medicamento.requiere_receta %}No disponible{% else %}Agregar <span aria-hidden="true">＋</span>{% endif %}
+                            <button type="submit" {% if medicamento.stock_vendible <= 0 %}disabled{% endif %}>
+                                {% if medicamento.stock_vendible <= 0 %}Sin stock{% elif medicamento.requiere_receta %}Agregar con receta <span aria-hidden="true">＋</span>{% else %}Agregar <span aria-hidden="true">＋</span>{% endif %}
                             </button>
                         </form>
                     </article>
@@ -108,6 +122,7 @@
                         <div class="linea-carrito-info">
                             <strong>{{ linea.medicamento.nombre }}</strong>
                             <span>{{ linea.cantidad }} unidad(es)</span>
+                            {% if linea.receta_id %}<span>Receta aprobada #{{ linea.receta_id }}</span>{% endif %}
                         </div>
                         {% if linea.subtotal is not None %}
                             <span class="linea-subtotal">{{ linea.subtotal|moneda_chilena }}</span>
@@ -140,7 +155,7 @@
                     {% endif %}
                 </div>
                 {% if carrito_tiene_precios %}
-                    <form method="post">
+                    <form method="post" data-json-response>
                         {% csrf_token %}
                         <input type="hidden" name="accion" value="confirmar_venta">
                         <input type="hidden" name="checkout_key" value="{{ checkout_key }}">
@@ -163,7 +178,7 @@
                     <button class="vaciar-carrito" type="submit">Vaciar pedido</button>
                 </form>
             {% else %}
-                <p class="aviso-caja aviso-seguridad">Los medicamentos con receta requieren completar primero su flujo de validaci&oacute;n y retenci&oacute;n.</p>
+                <p class="aviso-caja aviso-seguridad">Los medicamentos con receta se agregan ingresando el folio de una receta aprobada.</p>
             {% endif %}
         </aside>
     </div>
@@ -203,4 +218,46 @@
             </table>
         </div>
     </section>
+
+    <script>
+        (() => {
+            const feedback = document.getElementById("caja-feedback");
+            const forms = document.querySelectorAll("form[data-json-response]");
+            forms.forEach((form) => {
+                form.addEventListener("submit", async (event) => {
+                    event.preventDefault();
+                    feedback.hidden = true;
+                    const buttons = form.querySelectorAll("button[type='submit']");
+                    buttons.forEach((button) => {
+                        button.disabled = true;
+                    });
+                    try {
+                        const response = await fetch(form.action || window.location.href, {
+                            method: "POST",
+                            body: new FormData(form),
+                            headers: {
+                                "Accept": "application/json",
+                                "X-Requested-With": "XMLHttpRequest",
+                            },
+                            credentials: "same-origin",
+                        });
+                        if (response.ok) {
+                            window.location.reload();
+                            return;
+                        }
+                        const result = await response.json();
+                        feedback.textContent = result.message || "No fue posible completar la operación.";
+                        feedback.hidden = false;
+                    } catch (error) {
+                        feedback.textContent = "No fue posible comunicarse con la caja. Inténtalo nuevamente.";
+                        feedback.hidden = false;
+                    } finally {
+                        buttons.forEach((button) => {
+                            button.disabled = false;
+                        });
+                    }
+                });
+            });
+        })();
+    </script>
 {% endblock %}
