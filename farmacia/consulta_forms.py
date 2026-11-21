@@ -1,36 +1,7 @@
-from os.path import splitext
-
 from django import forms
 
 from farmacia.models import ConsultaJefeFarmacia
-
-
-MAX_RECETA_UPLOAD_BYTES = 5 * 1024 * 1024
-MAX_RECETA_IMAGE_PIXELS = 40_000_000
-EXTENSIONES_RECETA_PERMITIDAS = {".jpg", ".jpeg", ".png"}
-
-
-class RecetaImageField(forms.ImageField):
-    def to_python(self, data):
-        extension = splitext(getattr(data, "name", ""))[1].lower() if data else ""
-        if data and extension not in EXTENSIONES_RECETA_PERMITIDAS:
-            raise forms.ValidationError(
-                "La imagen de la receta debe tener extensión .jpg, .jpeg o .png.",
-                code="invalid_image_extension",
-            )
-        if data and getattr(data, "size", 0) > MAX_RECETA_UPLOAD_BYTES:
-            raise forms.ValidationError(
-                "La imagen de la receta no puede superar los 5 MB.",
-                code="image_too_large",
-            )
-
-        imagen = super().to_python(data)
-        if imagen and imagen.image.width * imagen.image.height > MAX_RECETA_IMAGE_PIXELS:
-            raise forms.ValidationError(
-                "La imagen supera el tamaño máximo permitido.",
-                code="image_dimensions_too_large",
-            )
-        return imagen
+from farmacia.receta_forms import RecetaImageField
 
 
 class ConsultaJefeFarmaciaForm(forms.ModelForm):

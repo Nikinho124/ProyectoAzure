@@ -1,5 +1,59 @@
+import logging
+from functools import wraps
+
+from django.db.utils import OperationalError
 from django.http import JsonResponse
 from django.shortcuts import render
+
+
+logger = logging.getLogger(__name__)
+
+
+def _es_bloqueo_de_base_de_datos(error):
+    mensaje = str(error).casefold()
+    return any(
+        causa in mensaje
+        for causa in (
+            "database is locked",
+            "database table is locked",
+            "database schema is locked",
+            "database is busy",
+        )
+    )
+
+
+def respuesta_bloqueo_base_datos(request, error):
+    if not _es_bloqueo_de_base_de_datos(error):
+        return None
+
+    logger.warning("SQLite rechazó una escritura por bloqueo temporal.")
+    respuesta = JsonResponse(
+        {
+            "status": "error",
+            "codigo": "CONCURRENCIA_EXCESIVA",
+            "mensaje": (
+                "El sistema se encuentra procesando múltiples solicitudes. "
+                "Por favor reintente en unos segundos."
+            ),
+        },
+        status=429,
+    )
+    respuesta["Retry-After"] = "2"
+    return respuesta
+
+
+def manejar_bloqueo_base_datos(view_func):
+    @wraps(view_func)
+    def wrapped(request, *args, **kwargs):
+        try:
+            return view_func(request, *args, **kwargs)
+        except OperationalError as error:
+            respuesta = respuesta_bloqueo_base_datos(request, error)
+            if respuesta is None:
+                raise
+            return respuesta
+
+    return wrapped
 
 
 def _solicita_json(request):

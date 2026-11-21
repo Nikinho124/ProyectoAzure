@@ -8,6 +8,7 @@ from django.contrib.auth.models import Group, Permission
 from django import forms
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
+from django.db.utils import OperationalError
 from django.db.models import F, IntegerField, OuterRef, Subquery, Sum, Value
 from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404, redirect, render
@@ -17,6 +18,7 @@ from django.utils.decorators import method_decorator
 from django.utils.html import format_html
 from django.views.decorators.http import require_POST
 
+from config.error_handlers import respuesta_bloqueo_base_datos
 from farmacia.models import (
     AutorizacionExcepcional,
     ConsultaJefeFarmacia,
@@ -421,6 +423,26 @@ class MermaAdmin(admin.ModelAdmin):
                 stock_disponible__gt=0
             ).select_related("medicamento").order_by("fecha_vencimiento")
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
+
+    def changeform_view(
+        self,
+        request,
+        object_id=None,
+        form_url="",
+        extra_context=None,
+    ):
+        try:
+            return super().changeform_view(
+                request,
+                object_id,
+                form_url,
+                extra_context,
+            )
+        except OperationalError as error:
+            respuesta = respuesta_bloqueo_base_datos(request, error)
+            if respuesta is None:
+                raise
+            return respuesta
 
     def save_model(self, request, obj, form, change):
         if not change:

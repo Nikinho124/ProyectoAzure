@@ -9,6 +9,8 @@ from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db.utils import OperationalError
+from django.http import QueryDict
 from django.test import Client, RequestFactory, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -476,9 +478,65 @@ class AccesoYFarmaciaTests(TestCase):
             HTTP_ACCEPT="application/json",
         )
         self.assertEqual(respuesta.status_code, 400)
-        self.assertEqual(respuesta.json()["error"], "invalid_action")
+        self.assertEqual(
+            respuesta.json()["codigo"],
+            "TIPO_DE_SOLICITUD_NO_ADMITIDO",
+        )
         self.assertEqual(self.client.session.get("farmacia_caja_carrito", {}), {})
         self.assertFalse(VentaCaja.objects.exists())
+
+    def test_caja_rechaza_parametros_repetidos_y_bloqueos_sqlite(self):
+        quimico = self.crear_quimico("quimico_parametros_repetidos")
+        self.client.force_login(quimico)
+
+        respuesta = self.client.post(
+            reverse("farmacia:caja"),
+            "accion=vaciar&accion=confirmar_venta",
+            content_type="application/x-www-form-urlencoded",
+            HTTP_ACCEPT="application/json",
+        )
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertEqual(respuesta.json()["codigo"], "PARAMETRO_REPETIDO")
+
+        with patch(
+            "farmacia.views._registrar_venta_simulada",
+            side_effect=OperationalError("database is locked"),
+        ):
+            respuesta = self.client.post(
+                reverse("farmacia:caja"),
+                {
+                    "accion": "confirmar_venta",
+                    "medio_pago": "efectivo",
+                    "checkout_key": "checkout-test",
+                },
+                HTTP_ACCEPT="application/json",
+            )
+
+        self.assertEqual(respuesta.status_code, 429)
+        self.assertEqual(
+            respuesta.json()["codigo"],
+            "CONCURRENCIA_EXCESIVA",
+        )
+        self.assertEqual(respuesta["Retry-After"], "2")
+
+    def test_endpoints_de_accion_y_fotos_rechazan_metodos_no_permitidos(self):
+        self.client.force_login(self.admin)
+
+        for nombre in (
+            "farmacia:resolver_receta_retenida",
+            "farmacia:resolver_excepcion_receta",
+        ):
+            with self.subTest(endpoint=nombre):
+                respuesta = self.client.get(reverse(nombre, args=(999,)))
+                self.assertEqual(respuesta.status_code, 405)
+
+        for nombre in (
+            "farmacia:foto_receta_retenida",
+            "farmacia:foto_consulta_jefe",
+        ):
+            with self.subTest(endpoint=nombre):
+                respuesta = self.client.post(reverse(nombre, args=(999,)))
+                self.assertEqual(respuesta.status_code, 405)
 
     def test_post_de_caja_sin_token_csrf_es_rechazado(self):
         quimico = self.crear_quimico("quimico_sin_csrf")
@@ -978,6 +1036,46 @@ class AccesoYFarmaciaTests(TestCase):
         self.assertTrue(respuesta.context["form"].errors["foto_receta"])
         self.assertFalse(VentaRecetaRetenida.objects.exists())
 
+    def test_receta_rechaza_svg_y_parametros_repetidos(self):
+        quimico = self.crear_quimico("auditor_svg_y_repetidos")
+        medicamento = Medicamento.objects.create(
+            codigo="MED-RECETA-SVG",
+            nombre="Medicamento para bloquear SVG",
+            requiere_receta=True,
+        )
+        self.client.force_login(quimico)
+
+        respuesta = self.client.post(
+            reverse("farmacia:recetas_retenidas"),
+            {
+                "cliente_rut": "11111111-1",
+                "medicamento": medicamento.pk,
+                "cantidad": "1",
+                "medico_prescriptor": "Dra. Ejemplo",
+                "foto_receta": SimpleUploadedFile(
+                    "receta.svg",
+                    b"<svg xmlns='http://www.w3.org/2000/svg'></svg>",
+                    content_type="image/svg+xml",
+                ),
+            },
+        )
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertTrue(respuesta.context["form"].errors["foto_receta"])
+        self.assertFalse(VentaRecetaRetenida.objects.exists())
+
+        respuesta = self.client.post(
+            reverse("farmacia:recetas_retenidas"),
+            (
+                "cliente_rut=11111111-1&"
+                f"medicamento={medicamento.pk}&cantidad=1&cantidad=2"
+            ),
+            content_type="application/x-www-form-urlencoded",
+            HTTP_ACCEPT="application/json",
+        )
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertEqual(respuesta.json()["codigo"], "PARAMETRO_REPETIDO")
+        self.assertFalse(VentaRecetaRetenida.objects.exists())
+
     def test_nombre_de_archivo_de_receta_no_puede_salir_de_su_directorio(self):
         quimico = self.crear_quimico("auditor_nombre_archivo")
         medicamento = Medicamento.objects.create(
@@ -1277,6 +1375,40 @@ class AccesoYFarmaciaTests(TestCase):
         )
         self.assertEqual(foto_jefe.status_code, 200)
         foto_jefe.close()
+
+    def test_imagen_de_consulta_se_recodifica_sin_metadatos_exif(self):
+        quimico = self.crear_quimico("quimico_imagen_exif")
+        self.client.force_login(quimico)
+        archivo = BytesIO()
+        exif = Image.Exif()
+        exif[270] = "metadato privado de prueba"
+        Image.new("RGB", (8, 8), color="white").save(
+            archivo,
+            format="JPEG",
+            exif=exif.tobytes(),
+        )
+
+        respuesta = self.client.post(
+            reverse("farmacia:consultas_jefe"),
+            {
+                "asunto": "Consulta para verificar metadatos",
+                "pregunta": "Comprobar limpieza de EXIF.",
+                "foto_receta": SimpleUploadedFile(
+                    "receta.jpg",
+                    archivo.getvalue(),
+                    content_type="image/jpeg",
+                ),
+            },
+        )
+
+        self.assertEqual(respuesta.status_code, 302)
+        consulta = ConsultaJefeFarmacia.objects.get()
+        self.addCleanup(lambda: consulta.foto_receta.delete(save=False))
+        with consulta.foto_receta.open("rb") as imagen_guardada:
+            with Image.open(imagen_guardada) as imagen:
+                self.assertEqual(imagen.format, "JPEG")
+                self.assertEqual(dict(imagen.getexif()), {})
+                self.assertNotIn("exif", imagen.info)
 
     def test_jefe_responde_consulta_solo_una_vez(self):
         quimico = self.crear_quimico()
@@ -1598,6 +1730,44 @@ class AccesoYFarmaciaTests(TestCase):
         self.assertEqual(merma.registrado_por, self.admin)
         ingreso.refresh_from_db()
         self.assertEqual(ingreso.stock_disponible, 8)
+
+    def test_merma_devuelve_429_si_sqlite_bloquea_el_guardado(self):
+        medicamento = Medicamento.objects.create(
+            codigo="MED-ADMIN-BLOQUEO",
+            nombre="Medicamento para probar bloqueo de merma",
+        )
+        ingreso = IngresoInventario.objects.create(
+            medicamento=medicamento,
+            lote="LOTE-ADMIN-BLOQUEO",
+            cantidad=10,
+            fecha_vencimiento=timezone.localdate() + timedelta(days=180),
+            registrado_por=self.admin,
+        )
+        self.client.force_login(self.admin)
+
+        with patch(
+            "farmacia.admin.MermaAdmin.save_model",
+            side_effect=OperationalError("database is locked"),
+        ):
+            respuesta = self.client.post(
+                reverse("admin:farmacia_merma_add"),
+                {
+                    "ingreso": ingreso.pk,
+                    "cantidad": 2,
+                    "motivo": Merma.Motivo.DANADO,
+                    "observacion": "Envase dañado durante transporte",
+                    "_save": "Guardar",
+                },
+                HTTP_ACCEPT="application/json",
+            )
+
+        self.assertEqual(respuesta.status_code, 429)
+        self.assertEqual(
+            respuesta.json()["codigo"],
+            "CONCURRENCIA_EXCESIVA",
+        )
+        self.assertEqual(respuesta["Retry-After"], "2")
+        self.assertFalse(Merma.objects.exists())
 
     def test_merma_requiere_observacion_en_formulario_y_modelo(self):
         medicamento = Medicamento.objects.create(

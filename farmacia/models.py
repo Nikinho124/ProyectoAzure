@@ -1,6 +1,7 @@
 import re
 import uuid
 from os.path import splitext
+from warnings import catch_warnings, simplefilter
 
 from django.conf import settings
 from django.contrib.auth.models import Group
@@ -9,6 +10,7 @@ from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models, transaction
 from django.db.models import F, Q, Sum
 from django.utils import timezone
+from PIL import Image, UnidentifiedImageError
 
 from farmacia.storage import PrivatePrescriptionStorage
 
@@ -19,6 +21,7 @@ MAX_UNIDADES_POR_RECETA = 6
 MAX_POSITIVE_INTEGER = 2_147_483_647
 MAX_POSITIVE_SMALL_INTEGER = 32_767
 MAX_RECETA_UPLOAD_BYTES = 5 * 1024 * 1024
+MAX_RECETA_IMAGE_PIXELS = 40_000_000
 EXTENSIONES_RECETA_PERMITIDAS = {".jpg", ".jpeg", ".png"}
 
 
@@ -30,6 +33,38 @@ def validar_archivo_receta(archivo):
         raise ValidationError(
             "La imagen de la receta debe tener extensión .jpg, .jpeg o .png."
         )
+    try:
+        archivo.seek(0)
+        with catch_warnings():
+            simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(archivo) as imagen:
+                formato = imagen.format
+                if formato not in {"JPEG", "PNG"}:
+                    raise ValidationError("El archivo debe ser una imagen JPG o PNG.")
+                if (
+                    extension in {".jpg", ".jpeg"} and formato != "JPEG"
+                ) or (extension == ".png" and formato != "PNG"):
+                    raise ValidationError(
+                        "La extensión del archivo no coincide con su formato real."
+                    )
+                if imagen.width * imagen.height > MAX_RECETA_IMAGE_PIXELS:
+                    raise ValidationError(
+                        "La imagen supera el tamaño máximo permitido."
+                    )
+                imagen.verify()
+    except ValidationError:
+        raise
+    except (
+        Image.DecompressionBombError,
+        Image.DecompressionBombWarning,
+        OSError,
+        TypeError,
+        UnidentifiedImageError,
+        ValueError,
+    ) as error:
+        raise ValidationError("El archivo debe ser una imagen JPG o PNG válida.") from error
+    finally:
+        archivo.seek(0)
 
 
 def validar_rut_chileno(value):
@@ -977,6 +1012,7 @@ class ConsultaJefeFarmacia(models.Model):
         "Foto de la receta",
         upload_to="consultas_jefe/%Y/%m/",
         storage=PrivatePrescriptionStorage(),
+        validators=[validar_archivo_receta],
     )
     estado = models.CharField(
         "Estado",

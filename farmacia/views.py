@@ -15,8 +15,9 @@ from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
-from django.views.decorators.http import require_http_methods
+from django.views.decorators.http import require_GET, require_http_methods
 
+from config.error_handlers import manejar_bloqueo_base_datos
 from farmacia.auth_forms import EmployeeAuthenticationForm
 from farmacia.models import (
     GRUPO_FARMACEUTICO,
@@ -62,6 +63,33 @@ def _es_personal_farmacia(user):
     )
 
 
+def _validar_payload_formulario(request, campos, archivos=()):
+    content_type = (request.content_type or "").lower()
+    if content_type == "application/json" or content_type.endswith("+json"):
+        return JsonResponse(
+            {
+                "status": "error",
+                "codigo": "TIPO_DE_SOLICITUD_NO_ADMITIDO",
+                "mensaje": "Este endpoint acepta datos de formulario, no JSON.",
+            },
+            status=400,
+        )
+
+    tiene_repetidos = any(
+        len(request.POST.getlist(campo)) > 1 for campo in campos
+    ) or any(len(request.FILES.getlist(campo)) > 1 for campo in archivos)
+    if tiene_repetidos:
+        return JsonResponse(
+            {
+                "status": "error",
+                "codigo": "PARAMETRO_REPETIDO",
+                "mensaje": "Envía un solo valor para cada parámetro.",
+            },
+            status=400,
+        )
+    return None
+
+
 def _es_jefe_farmacia(user):
     return user.is_authenticated and (
         user.is_superuser
@@ -105,6 +133,7 @@ def _medicamentos_con_stock():
     )
 
 
+@require_GET
 @login_required
 def inicio_farmacia(request):
     if not _es_personal_farmacia(request.user):
@@ -137,6 +166,7 @@ def inicio_farmacia(request):
     )
 
 
+@manejar_bloqueo_base_datos
 @login_required
 @require_http_methods(["GET", "POST"])
 def recetas_retenidas(request):
@@ -147,6 +177,19 @@ def recetas_retenidas(request):
 
     form = None
     if request.method == "POST":
+        respuesta = _validar_payload_formulario(
+            request,
+            (
+                "cliente_rut",
+                "medicamento",
+                "cantidad",
+                "medico_prescriptor",
+                "motivo_excepcion",
+            ),
+            ("foto_receta",),
+        )
+        if respuesta:
+            return respuesta
         if es_jefe or not es_auditor:
             raise PermissionDenied
         form = VentaRecetaRetenidaForm(request.POST, request.FILES)
@@ -218,11 +261,19 @@ def recetas_retenidas(request):
     )
 
 
+@manejar_bloqueo_base_datos
 @login_required
 @require_http_methods(["POST"])
 def resolver_receta_retenida(request, venta_id):
     if not (_es_jefe_farmacia(request.user) or _es_auditor_qf(request.user)):
         raise PermissionDenied
+
+    respuesta = _validar_payload_formulario(
+        request,
+        ("decision", "observacion"),
+    )
+    if respuesta:
+        return respuesta
 
     venta = get_object_or_404(VentaRecetaRetenida, pk=venta_id)
     form = RevisionRecetaForm(request.POST)
@@ -250,11 +301,19 @@ def resolver_receta_retenida(request, venta_id):
     return redirect("farmacia:recetas_retenidas")
 
 
+@manejar_bloqueo_base_datos
 @login_required
 @require_http_methods(["POST"])
 def resolver_excepcion_receta(request, autorizacion_id):
     if not _es_jefe_farmacia(request.user):
         raise PermissionDenied
+
+    respuesta = _validar_payload_formulario(
+        request,
+        ("decision", "respuesta"),
+    )
+    if respuesta:
+        return respuesta
 
     autorizacion = get_object_or_404(
         AutorizacionExcepcional,
@@ -285,6 +344,7 @@ def resolver_excepcion_receta(request, autorizacion_id):
     return redirect("farmacia:recetas_retenidas")
 
 
+@require_GET
 @login_required
 def foto_receta_retenida(request, venta_id):
     venta = get_object_or_404(
@@ -320,6 +380,7 @@ def foto_receta_retenida(request, venta_id):
     return respuesta
 
 
+@manejar_bloqueo_base_datos
 @login_required
 @require_http_methods(["GET", "POST"])
 def consultas_jefe_farmacia(request):
@@ -333,6 +394,19 @@ def consultas_jefe_farmacia(request):
 
     es_jefe = _es_jefe_farmacia(request.user)
     if request.method == "POST":
+        respuesta = _validar_payload_formulario(
+            request,
+            (
+                "consulta_id",
+                "respuesta",
+                "asunto",
+                "pregunta",
+            ),
+            ("foto_receta",),
+        )
+        if respuesta:
+            return respuesta
+
         if es_jefe:
             consulta = get_object_or_404(
                 ConsultaJefeFarmacia,
@@ -397,6 +471,7 @@ def consultas_jefe_farmacia(request):
     )
 
 
+@require_GET
 @login_required
 def foto_consulta_jefe_farmacia(request, consulta_id):
     consulta = get_object_or_404(ConsultaJefeFarmacia, pk=consulta_id)
@@ -724,6 +799,7 @@ def _registrar_venta_simulada(
     return venta
 
 
+@manejar_bloqueo_base_datos
 @login_required
 @require_http_methods(["GET", "POST"])
 def caja(request):
@@ -733,6 +809,20 @@ def caja(request):
     carrito = _obtener_carrito(request)
     recetas_carrito = _obtener_recetas_carrito(request)
     if request.method == "POST":
+        respuesta = _validar_payload_formulario(
+            request,
+            (
+                "accion",
+                "medicamento_id",
+                "cantidad",
+                "receta_id",
+                "medio_pago",
+                "checkout_key",
+            ),
+        )
+        if respuesta:
+            return respuesta
+
         accion = request.POST.get("accion")
         if accion == "agregar":
             medicamento_id = _parse_primary_key(
