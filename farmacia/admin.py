@@ -86,8 +86,39 @@ class FarmaUserChangeForm(DjangoUserChangeForm):
         ),
     )
 
+    class Meta(DjangoUserChangeForm.Meta):
+        fields = (
+            "password",
+            "is_superuser",
+            "groups",
+            "user_permissions",
+            "username",
+            "first_name",
+            "last_name",
+            "email",
+            "is_staff",
+            "is_active",
+        )
 
-class FarmaUserAdmin(DjangoUserAdmin):
+
+class AdministracionSoloSuperusuario:
+    def has_module_permission(self, request):
+        return request.user.is_superuser
+
+    def has_view_permission(self, request, obj=None):
+        return request.user.is_superuser
+
+    def has_add_permission(self, request):
+        return request.user.is_superuser
+
+    def has_change_permission(self, request, obj=None):
+        return request.user.is_superuser
+
+    def has_delete_permission(self, request, obj=None):
+        return request.user.is_superuser
+
+
+class FarmaUserAdmin(AdministracionSoloSuperusuario, DjangoUserAdmin):
     form = FarmaUserChangeForm
     fieldsets = (
         ("Acceso a la cuenta", {"fields": ("username", "password")}),
@@ -138,7 +169,7 @@ class FarmaGroupChangeForm(forms.ModelForm):
         labels = {"name": "Nombre del grupo"}
 
 
-class FarmaGroupAdmin(admin.ModelAdmin):
+class FarmaGroupAdmin(AdministracionSoloSuperusuario, admin.ModelAdmin):
     form = FarmaGroupChangeForm
     filter_horizontal = ("permissions",)
     list_display = ("name",)

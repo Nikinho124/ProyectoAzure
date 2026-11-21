@@ -7,6 +7,7 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db.utils import OperationalError
@@ -16,6 +17,8 @@ from django.urls import reverse
 from django.utils import timezone
 from PIL import Image
 
+from farmacia.auth_forms import EmployeeAuthenticationForm
+from farmacia.consulta_forms import ConsultaJefeFarmaciaForm
 from farmacia.models import (
     GRUPO_FARMACEUTICO,
     GRUPO_JEFE_FARMACIA,
@@ -30,6 +33,7 @@ from farmacia.models import (
     VentaCaja,
     validar_archivo_receta,
 )
+from farmacia.receta_forms import VentaRecetaRetenidaForm
 
 User = get_user_model()
 
@@ -53,6 +57,111 @@ class AccesoYFarmaciaTests(TestCase):
         self.assertContains(respuesta, "pie-sitio")
         self.assertContains(respuesta, "Tel&eacute;fono")
         self.assertContains(respuesta, "farmacia/sitio.css?v=3")
+
+    def test_cabeceras_y_opciones_de_cookies_de_seguridad(self):
+        respuesta = self.client.get(reverse("login"))
+
+        self.assertEqual(respuesta["X-Frame-Options"], "DENY")
+        self.assertEqual(respuesta["X-Content-Type-Options"], "nosniff")
+        self.assertEqual(settings.X_FRAME_OPTIONS, "DENY")
+        self.assertTrue(settings.SESSION_COOKIE_HTTPONLY)
+        self.assertTrue(settings.CSRF_COOKIE_HTTPONLY)
+        self.assertEqual(settings.SESSION_COOKIE_SAMESITE, "Lax")
+        self.assertEqual(settings.CSRF_COOKIE_SAMESITE, "Lax")
+        self.assertTrue(settings.SESSION_EXPIRE_AT_BROWSER_CLOSE)
+        csrf_cookie = respuesta.cookies[settings.CSRF_COOKIE_NAME]
+        self.assertEqual(csrf_cookie["httponly"], True)
+
+    @override_settings(ALLOWED_HOSTS=["localhost", "127.0.0.1", "[::1]"])
+    def test_login_rechaza_un_host_que_no_esta_permitido(self):
+        respuesta = self.client.get(
+            reverse("login"),
+            HTTP_HOST="sitio-no-autorizado.example",
+        )
+
+        self.assertEqual(respuesta.status_code, 400)
+
+    def test_login_cambia_el_id_de_sesion_al_autenticar(self):
+        session = self.client.session
+        session["dato_anonimo"] = "valor previo al login"
+        session.save()
+        session_key_anterior = session.session_key
+
+        respuesta = self.client.post(
+            reverse("login"),
+            {
+                "username": self.admin.username,
+                "password": "Admin-password-123",
+            },
+        )
+
+        self.assertRedirects(
+            respuesta,
+            reverse("admin:index"),
+            fetch_redirect_response=False,
+        )
+        self.assertNotEqual(
+            self.client.cookies[settings.SESSION_COOKIE_NAME].value,
+            session_key_anterior,
+        )
+
+    def test_formularios_no_exponen_campos_de_rol_o_estado_interno(self):
+        from farmacia.admin import FarmaGroupChangeForm, FarmaUserChangeForm
+
+        campos_privilegiados = {
+            "is_staff",
+            "is_superuser",
+            "groups",
+            "user_permissions",
+            "auditor_qf",
+            "jefe_farmacia",
+            "revisado_por",
+            "estado",
+            "solicitante",
+            "fecha_respuesta",
+        }
+        formularios = (
+            EmployeeAuthenticationForm(),
+            VentaRecetaRetenidaForm(),
+            ConsultaJefeFarmaciaForm(),
+        )
+
+        for formulario in formularios:
+            with self.subTest(formulario=formulario.__class__.__name__):
+                self.assertTrue(
+                    campos_privilegiados.isdisjoint(formulario.fields)
+                )
+        self.assertIsNotNone(FarmaUserChangeForm._meta.fields)
+        self.assertIsNotNone(FarmaGroupChangeForm._meta.fields)
+        self.assertNotEqual(FarmaUserChangeForm._meta.fields, "__all__")
+        self.assertNotEqual(FarmaGroupChangeForm._meta.fields, "__all__")
+
+    def test_staff_no_superusuario_no_puede_editar_usuarios_ni_permisos_de_grupo(self):
+        staff = User.objects.create_user(
+            username="staff_sin_admin_privilegiado",
+            password="Staff-password-123",
+            is_staff=True,
+        )
+        staff.user_permissions.add(
+            Permission.objects.get(
+                content_type__app_label="auth",
+                codename="change_user",
+            ),
+            Permission.objects.get(
+                content_type__app_label="auth",
+                codename="change_group",
+            ),
+        )
+        grupo = Group.objects.create(name="Grupo protegido")
+        self.client.force_login(staff)
+
+        for url in (
+            reverse("admin:auth_user_change", args=(self.admin.pk,)),
+            reverse("admin:auth_group_change", args=(grupo.pk,)),
+        ):
+            with self.subTest(url=url):
+                respuesta = self.client.get(url)
+                self.assertEqual(respuesta.status_code, 403)
 
     def test_superusuario_jefe_qf_va_al_admin_al_iniciar_sesion(self):
         self.admin.username = "jefe_qf"
@@ -84,12 +193,23 @@ class AccesoYFarmaciaTests(TestCase):
             {
                 "username": "usuario",
                 "password": "Usuario-password-123",
+                "is_staff": "true",
+                "is_superuser": "true",
+                "groups": str(
+                    Group.objects.get_or_create(
+                        name=GRUPO_JEFE_FARMACIA
+                    )[0].pk
+                ),
             },
         )
 
         self.assertEqual(respuesta.status_code, 200)
         self.assertContains(respuesta, "exclusiva para personal autorizado")
         self.assertFalse("_auth_user_id" in self.client.session)
+        usuario.refresh_from_db()
+        self.assertFalse(usuario.is_staff)
+        self.assertFalse(usuario.is_superuser)
+        self.assertFalse(usuario.groups.exists())
 
     def test_usuario_staff_sin_rol_farmaceutico_no_puede_iniciar_sesion(self):
         usuario = User.objects.create_user(
@@ -931,6 +1051,12 @@ class AccesoYFarmaciaTests(TestCase):
                 "cantidad": "6",
                 "medico_prescriptor": "Dra. Ejemplo",
                 "foto_receta": self.crear_imagen_receta(),
+                "auditor_qf": self.admin.pk,
+                "jefe_farmacia": self.admin.pk,
+                "revisado_por": self.admin.pk,
+                "estado": VentaRecetaRetenida.Estado.APROBADA,
+                "is_staff": "true",
+                "is_superuser": "true",
             },
         )
 
@@ -943,6 +1069,11 @@ class AccesoYFarmaciaTests(TestCase):
         self.addCleanup(lambda: venta.foto_receta.delete(save=False))
         self.assertEqual(venta.auditor_qf, quimico)
         self.assertEqual(venta.estado, VentaRecetaRetenida.Estado.PENDIENTE_REVISION)
+        self.assertIsNone(venta.jefe_farmacia)
+        self.assertIsNone(venta.revisado_por)
+        quimico.refresh_from_db()
+        self.assertFalse(quimico.is_staff)
+        self.assertFalse(quimico.is_superuser)
         self.assertFalse(venta.autorizaciones_excepcionales.exists())
 
     def test_formulario_receta_rechaza_cantidades_fuera_de_rango(self):
@@ -1335,6 +1466,10 @@ class AccesoYFarmaciaTests(TestCase):
                 "asunto": "Duda sobre indicación",
                 "pregunta": "¿Podría confirmar la dosis indicada?",
                 "foto_receta": self.crear_imagen_receta(),
+                "solicitante": self.admin.pk,
+                "jefe_farmacia": self.admin.pk,
+                "estado": ConsultaJefeFarmacia.Estado.RESPONDIDA,
+                "respuesta": "Respuesta inyectada",
             },
         )
 
@@ -1347,6 +1482,8 @@ class AccesoYFarmaciaTests(TestCase):
         self.addCleanup(lambda: consulta.foto_receta.delete(save=False))
         self.assertEqual(consulta.solicitante, quimico)
         self.assertEqual(consulta.estado, ConsultaJefeFarmacia.Estado.PENDIENTE)
+        self.assertIsNone(consulta.jefe_farmacia)
+        self.assertEqual(consulta.respuesta, "")
 
         foto = self.client.get(
             reverse("farmacia:foto_consulta_jefe", args=(consulta.pk,))

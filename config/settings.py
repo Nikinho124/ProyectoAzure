@@ -62,8 +62,12 @@ if hosts_value:
         raise ImproperlyConfigured(
             "DJANGO_ALLOWED_HOSTS debe incluir al menos un dominio."
         )
+    if "*" in ALLOWED_HOSTS:
+        raise ImproperlyConfigured(
+            "DJANGO_ALLOWED_HOSTS no puede incluir el comodín '*'."
+        )
 elif DEBUG:
-    ALLOWED_HOSTS = ["localhost", "127.0.0.1", "testserver"]
+    ALLOWED_HOSTS = ["localhost", "127.0.0.1", "[::1]"]
 else:
     raise ImproperlyConfigured(
         "Configura DJANGO_ALLOWED_HOSTS con los dominios permitidos."
@@ -120,8 +124,15 @@ SECURE_SSL_REDIRECT = _environment_bool(
     not DEBUG,
 )
 SESSION_COOKIE_SECURE = not DEBUG
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = "Lax"
+SESSION_EXPIRE_AT_BROWSER_CLOSE = True
 CSRF_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_HTTPONLY = True
+CSRF_COOKIE_SAMESITE = "Lax"
+X_FRAME_OPTIONS = "DENY"
 SECURE_CONTENT_TYPE_NOSNIFF = True
+# Django 4.0+ removed SECURE_BROWSER_XSS_FILTER; it is not an active defense.
 try:
     SECURE_HSTS_SECONDS = int(os.environ.get("DJANGO_HSTS_SECONDS", "0"))
 except ValueError as error:
