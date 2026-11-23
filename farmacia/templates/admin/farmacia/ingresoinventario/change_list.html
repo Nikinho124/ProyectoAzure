@@ -1,0 +1,44 @@
+{% extends "admin/change_list.html" %}
+
+{% block filters %}
+    {{ block.super }}
+    <dialog id="ajustar-lote-dialog" class="inventario-dialog" aria-labelledby="ajustar-lote-titulo">
+        <form method="post" id="ajustar-lote-form">
+            {% csrf_token %}
+            <h2 id="ajustar-lote-titulo">Corregir lote / stock</h2>
+            <label for="ajustar-cantidad">Cantidad recibida corregida</label>
+            <input id="ajustar-cantidad" name="cantidad" type="number" min="1" step="1" required>
+            <label for="ajustar-fecha">Fecha de vencimiento</label>
+            <input id="ajustar-fecha" name="fecha_vencimiento" type="date" required>
+            <label for="ajustar-motivo">Motivo del ajuste</label>
+            <textarea id="ajustar-motivo" name="motivo" maxlength="1800" rows="4" required></textarea>
+            <label for="ajustar-password">Contraseña de confirmación</label>
+            <input id="ajustar-password" name="password_confirmacion" type="password" autocomplete="current-password" required>
+            <div class="inventario-dialog-actions">
+                <button class="default" type="submit">Guardar corrección</button>
+                <button class="button" type="button" data-cerrar-dialogo>Cancelar</button>
+            </div>
+        </form>
+    </dialog>
+    <script nonce="{{ request.csp_nonce }}">
+        (() => {
+            const dialog = document.getElementById("ajustar-lote-dialog");
+            const form = document.getElementById("ajustar-lote-form");
+            document.addEventListener("click", (event) => {
+                if (!(event.target instanceof Element)) return;
+                const trigger = event.target.closest("[data-ajustar-lote]");
+                if (trigger) {
+                    form.action = trigger.dataset.url;
+                    form.elements.namedItem("cantidad").value = trigger.dataset.cantidad;
+                    form.elements.namedItem("fecha_vencimiento").value = trigger.dataset.fecha;
+                    form.elements.namedItem("motivo").value = "";
+                    form.elements.namedItem("password_confirmacion").value = "";
+                    dialog.showModal();
+                    form.elements.namedItem("cantidad").focus();
+                } else if (event.target.closest("[data-cerrar-dialogo]")) {
+                    dialog.close();
+                }
+            });
+        })();
+    </script>
+{% endblock %}

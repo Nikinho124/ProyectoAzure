@@ -1,6 +1,7 @@
 from datetime import timedelta
 
 from django.contrib import admin, messages
+from django.contrib.admin.forms import AdminAuthenticationForm
 from django.contrib.auth import get_user_model
 from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 from django.contrib.auth.forms import UserChangeForm as DjangoUserChangeForm
@@ -8,6 +9,7 @@ from django.contrib.auth.models import Group, Permission
 from django import forms
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
+from django.db.models.deletion import ProtectedError
 from django.db.utils import OperationalError
 from django.db.models import F, IntegerField, OuterRef, Subquery, Sum, Value
 from django.db.models.functions import Coalesce
@@ -21,13 +23,15 @@ from django.views.decorators.http import require_POST
 from config.error_handlers import respuesta_bloqueo_base_datos
 from farmacia.models import (
     AutorizacionExcepcional,
+    AuditoriaInventario,
     ConsultaJefeFarmacia,
     DetalleVentaCaja,
     GRUPO_FARMACEUTICO,
-    GRUPO_JEFE_FARMACIA,
+    GRUPOS_JEFE_FARMACIA,
     IngresoInventario,
     Medicamento,
     Merma,
+    Proveedor,
     SimulacionPago,
     SolicitudCuenta,
     VentaCaja,
@@ -182,11 +186,30 @@ def _ingresos_con_stock_disponible():
     return IngresoInventario.objects.all()
 
 
+class FarmaAdminAuthenticationForm(AdminAuthenticationForm):
+    def confirm_login_allowed(self, user):
+        es_jefe = user.groups.filter(name__in=GRUPOS_JEFE_FARMACIA).exists()
+        if not user.is_active or not (user.is_staff or es_jefe):
+            raise ValidationError(
+                self.error_messages["invalid_login"],
+                code="invalid_login",
+            )
+
+
 class FarmaAdminSite(admin.AdminSite):
     site_header = "FarmaSistem · Administración"
     site_title = "Administración de FarmaSistem"
     index_title = "Resumen de la farmacia"
     index_template = "admin/farmacia_index.html"
+    login_form = FarmaAdminAuthenticationForm
+
+    def has_permission(self, request):
+        user = request.user
+        return user.is_active and (
+            user.is_staff
+            or user.is_superuser
+            or user.groups.filter(name__in=GRUPOS_JEFE_FARMACIA).exists()
+        )
 
     def get_app_list(self, request, app_label=None):
         app_list = super().get_app_list(request, app_label)
@@ -255,7 +278,7 @@ class FarmaAdminSite(admin.AdminSite):
                 "consultas_jefe_disponible": (
                     request.user.is_superuser
                     or request.user.groups.filter(
-                        name__in=(GRUPO_FARMACEUTICO, GRUPO_JEFE_FARMACIA)
+                        name__in=(GRUPO_FARMACEUTICO, *GRUPOS_JEFE_FARMACIA)
                     ).exists()
                 ),
                 "consultas_jefe_pendientes": ConsultaJefeFarmacia.objects.filter(
@@ -363,6 +386,53 @@ class VencimientoFilter(admin.SimpleListFilter):
         return queryset
 
 
+@admin.register(Proveedor, site=farmacia_admin_site)
+class ProveedorAdmin(admin.ModelAdmin):
+    list_display = ("nombre", "rut", "activo")
+    list_filter = ("activo",)
+    search_fields = ("nombre", "rut")
+    ordering = ("nombre",)
+    list_per_page = 25
+
+    def _puede_gestionar_proveedores(self, request):
+        return request.user.is_active and (
+            request.user.is_superuser
+            or request.user.groups.filter(
+                name__in=GRUPOS_JEFE_FARMACIA
+            ).exists()
+        )
+
+    def has_module_permission(self, request):
+        return self._puede_gestionar_proveedores(request)
+
+    def has_view_permission(self, request, obj=None):
+        return self._puede_gestionar_proveedores(request)
+
+    def has_add_permission(self, request):
+        return self._puede_gestionar_proveedores(request)
+
+    def has_change_permission(self, request, obj=None):
+        return self._puede_gestionar_proveedores(request)
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def changeform_view(self, request, object_id=None, form_url="", extra_context=None):
+        try:
+            return super().changeform_view(
+                request,
+                object_id,
+                form_url,
+                extra_context,
+            )
+        except ProtectedError:
+            messages.error(
+                request,
+                "No se pudo guardar el proveedor por una restricción de integridad.",
+            )
+            return redirect("admin:farmacia_proveedor_changelist")
+
+
 @admin.register(IngresoInventario, site=farmacia_admin_site)
 class IngresoInventarioAdmin(admin.ModelAdmin):
     list_display = (
@@ -376,20 +446,71 @@ class IngresoInventarioAdmin(admin.ModelAdmin):
         "fecha_ingreso",
     )
     list_filter = (VencimientoFilter, "medicamento")
-    search_fields = ("medicamento__nombre", "medicamento__codigo", "lote", "proveedor")
+    search_fields = (
+        "medicamento__nombre",
+        "medicamento__codigo",
+        "lote",
+        "proveedor__nombre",
+    )
     autocomplete_fields = ("medicamento",)
     date_hierarchy = "fecha_vencimiento"
-    list_select_related = ("medicamento", "registrado_por")
+    list_select_related = ("medicamento", "proveedor", "registrado_por")
     readonly_fields = ("fecha_ingreso", "registrado_por")
     list_display_links = None
     list_per_page = 25
+    change_list_template = "admin/farmacia/ingresoinventario/change_list.html"
 
     def get_queryset(self, request):
         return super().get_queryset(request)
 
+    def get_list_display(self, request):
+        list_display = super().get_list_display(request)
+        if self._puede_ajustar_inventario(request):
+            return (*list_display, "acciones_ajuste")
+        return list_display
+
+    def _puede_ajustar_inventario(self, request):
+        return request.user.is_active and (
+            request.user.is_superuser
+            or request.user.groups.filter(
+                name__in=GRUPOS_JEFE_FARMACIA
+            ).exists()
+        )
+
+    def has_module_permission(self, request):
+        return self._puede_ajustar_inventario(
+            request
+        ) or super().has_module_permission(request)
+
+    def has_view_permission(self, request, obj=None):
+        return self._puede_ajustar_inventario(
+            request
+        ) or super().has_view_permission(request, obj)
+
+    def has_add_permission(self, request):
+        return self._puede_ajustar_inventario(
+            request
+        ) or super().has_add_permission(request)
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        if db_field.name == "proveedor":
+            kwargs["queryset"] = Proveedor.objects.filter(activo=True)
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
+
     @admin.display(description="Stock actual del lote", ordering="stock_disponible")
     def stock_disponible_columna(self, obj):
         return obj.stock_disponible
+
+    @admin.display(description="Acciones")
+    def acciones_ajuste(self, obj):
+        return format_html(
+            '<button type="button" class="button" data-ajustar-lote '
+            'data-url="{}" data-cantidad="{}" data-fecha="{}">'
+            "Corregir lote / stock</button>",
+            reverse("farmacia:ajustar_stock_lote", args=(obj.pk,)),
+            obj.cantidad,
+            obj.fecha_vencimiento.isoformat(),
+        )
 
     @admin.display(description="Estado del lote")
     def estado_vencimiento(self, obj):
@@ -406,7 +527,11 @@ class IngresoInventarioAdmin(admin.ModelAdmin):
         super().save_model(request, obj, form, change)
 
     def has_change_permission(self, request, obj=None):
-        return obj is None and super().has_change_permission(request)
+        if obj is not None:
+            return False
+        return self._puede_ajustar_inventario(
+            request
+        ) or super().has_change_permission(request)
 
     def has_delete_permission(self, request, obj=None):
         return False
@@ -421,6 +546,7 @@ class MermaAdmin(admin.ModelAdmin):
         "motivo",
         "fecha_registro",
         "registrado_por",
+        "estado_reversion",
     )
     list_filter = ("motivo", "fecha_registro")
     search_fields = (
@@ -431,14 +557,44 @@ class MermaAdmin(admin.ModelAdmin):
     )
     autocomplete_fields = ("ingreso",)
     list_select_related = ("ingreso__medicamento", "registrado_por")
-    readonly_fields = ("fecha_registro", "registrado_por")
+    readonly_fields = ("fecha_registro", "registrado_por", "revertida")
     list_display_links = None
     list_per_page = 25
+    change_list_template = "admin/farmacia/merma/change_list.html"
     fieldsets = (
         ("Lote afectado", {"fields": ("ingreso", "cantidad")}),
         ("Detalle de la merma", {"fields": ("motivo", "observacion")}),
-        ("Registro", {"fields": ("fecha_registro", "registrado_por")}),
+        ("Registro", {"fields": ("fecha_registro", "registrado_por", "revertida")}),
     )
+
+    def get_list_display(self, request):
+        list_display = super().get_list_display(request)
+        if self._puede_revertir_mermas(request):
+            return (*list_display, "acciones_reversion")
+        return list_display
+
+    def _puede_revertir_mermas(self, request):
+        return request.user.is_active and (
+            request.user.is_superuser
+            or request.user.groups.filter(
+                name__in=GRUPOS_JEFE_FARMACIA
+            ).exists()
+        )
+
+    def has_module_permission(self, request):
+        return self._puede_revertir_mermas(
+            request
+        ) or super().has_module_permission(request)
+
+    def has_view_permission(self, request, obj=None):
+        return self._puede_revertir_mermas(
+            request
+        ) or super().has_view_permission(request, obj)
+
+    def has_add_permission(self, request):
+        return self._puede_revertir_mermas(
+            request
+        ) or super().has_add_permission(request)
 
     @admin.display(description="Medicamento")
     def medicamento_columna(self, obj):
@@ -447,6 +603,24 @@ class MermaAdmin(admin.ModelAdmin):
     @admin.display(description="Lote")
     def lote_columna(self, obj):
         return obj.ingreso.lote
+
+    @admin.display(description="Estado")
+    def estado_reversion(self, obj):
+        return "Revertida" if obj.revertida else "Activa"
+
+    @admin.display(description="Acciones")
+    def acciones_reversion(self, obj):
+        if obj.revertida:
+            return "Merma revertida"
+        return format_html(
+            '<button type="button" class="button" data-revertir-merma '
+            'data-url="{}" data-cantidad="{}" data-medicamento="{}" '
+            'data-lote="{}">Anular / corregir merma</button>',
+            reverse("farmacia:revertir_merma", args=(obj.pk,)),
+            obj.cantidad,
+            obj.ingreso.medicamento,
+            obj.ingreso.lote,
+        )
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "ingreso":
@@ -481,7 +655,62 @@ class MermaAdmin(admin.ModelAdmin):
         super().save_model(request, obj, form, change)
 
     def has_change_permission(self, request, obj=None):
-        return obj is None and super().has_change_permission(request)
+        if obj is not None:
+            return False
+        return self._puede_revertir_mermas(
+            request
+        ) or super().has_change_permission(request)
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(AuditoriaInventario, site=farmacia_admin_site)
+class AuditoriaInventarioAdmin(admin.ModelAdmin):
+    list_display = (
+        "fecha_registro",
+        "tipo_ajuste",
+        "lote",
+        "merma",
+        "usuario",
+        "cantidad_anterior",
+        "cantidad_nueva",
+    )
+    list_filter = ("tipo_ajuste", "fecha_registro")
+    search_fields = (
+        "lote__lote",
+        "lote__medicamento__nombre",
+        "merma__pk",
+        "usuario__username",
+        "motivo",
+    )
+    list_select_related = ("lote__medicamento", "merma", "usuario")
+    readonly_fields = tuple(
+        field.name for field in AuditoriaInventario._meta.fields
+    )
+    list_display_links = ("fecha_registro",)
+    date_hierarchy = "fecha_registro"
+    list_per_page = 25
+
+    def _puede_ver_auditoria(self, request):
+        return request.user.is_active and (
+            request.user.is_superuser
+            or request.user.groups.filter(
+                name__in=GRUPOS_JEFE_FARMACIA
+            ).exists()
+        )
+
+    def has_module_permission(self, request):
+        return self._puede_ver_auditoria(request)
+
+    def has_view_permission(self, request, obj=None):
+        return self._puede_ver_auditoria(request)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
 
     def has_delete_permission(self, request, obj=None):
         return False

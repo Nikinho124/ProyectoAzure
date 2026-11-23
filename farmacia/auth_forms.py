@@ -1,7 +1,7 @@
 from django.contrib.auth.forms import AuthenticationForm
 from django.core.exceptions import ValidationError
 
-from farmacia.models import GRUPO_FARMACEUTICO, GRUPO_JEFE_FARMACIA
+from farmacia.models import GRUPO_FARMACEUTICO, GRUPOS_JEFE_FARMACIA
 
 
 class EmployeeAuthenticationForm(AuthenticationForm):
@@ -14,7 +14,7 @@ class EmployeeAuthenticationForm(AuthenticationForm):
         if not user.is_active or not (
             user.is_superuser
             or user.groups.filter(
-                name__in=(GRUPO_FARMACEUTICO, GRUPO_JEFE_FARMACIA)
+                name__in=(GRUPO_FARMACEUTICO, *GRUPOS_JEFE_FARMACIA)
             ).exists()
         ):
             raise ValidationError(

@@ -1,6 +1,7 @@
 import re
 import unicodedata
 import uuid
+from datetime import date
 from os.path import splitext
 from warnings import catch_warnings, simplefilter
 
@@ -8,7 +9,7 @@ from django.conf import settings
 from django.contrib.auth.models import Group
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
-from django.db import models, transaction
+from django.db import IntegrityError, models, transaction
 from django.db.models import F, Q, Sum
 from django.utils import timezone
 from PIL import Image, UnidentifiedImageError
@@ -18,9 +19,11 @@ from farmacia.storage import PrivatePrescriptionStorage
 
 GRUPO_FARMACEUTICO = "Auditor_QF"
 GRUPO_JEFE_FARMACIA = "Jefe de Farmacia"
+GRUPOS_JEFE_FARMACIA = (GRUPO_JEFE_FARMACIA, "Jefe_QF")
 MAX_UNIDADES_POR_RECETA = 6
 MAX_POSITIVE_INTEGER = 2_147_483_647
 MAX_POSITIVE_SMALL_INTEGER = 32_767
+MAX_MOTIVO_AJUSTE_LENGTH = 2000
 MAX_RECETA_UPLOAD_BYTES = 5 * 1024 * 1024
 MAX_RECETA_IMAGE_PIXELS = settings.RECETA_MAX_IMAGE_PIXELS
 EXTENSIONES_RECETA_PERMITIDAS = {".jpg", ".jpeg", ".png"}
@@ -285,7 +288,7 @@ class VentaRecetaRetenida(SanitizaTextoMixin, models.Model):
         if self.jefe_farmacia_id and not (
             self.jefe_farmacia.is_superuser
             or self.jefe_farmacia.groups.filter(
-                name=GRUPO_JEFE_FARMACIA
+                name__in=GRUPOS_JEFE_FARMACIA
             ).exists()
         ):
             raise ValidationError(
@@ -293,7 +296,9 @@ class VentaRecetaRetenida(SanitizaTextoMixin, models.Model):
             )
         if self.revisado_por_id and not (
             self.revisado_por.is_superuser
-            or self.revisado_por.groups.filter(name=GRUPO_JEFE_FARMACIA).exists()
+            or self.revisado_por.groups.filter(
+                name__in=GRUPOS_JEFE_FARMACIA
+            ).exists()
         ):
             raise ValidationError(
                 {"revisado_por": "Solo el Jefe de Farmacia puede revisar recetas."}
@@ -311,7 +316,7 @@ class VentaRecetaRetenida(SanitizaTextoMixin, models.Model):
 
     def aprobar(self, revisor):
         es_jefe = revisor.is_superuser or revisor.groups.filter(
-            name=GRUPO_JEFE_FARMACIA
+            name__in=GRUPOS_JEFE_FARMACIA
         ).exists()
         if not es_jefe:
             raise PermissionDenied(
@@ -351,7 +356,7 @@ class VentaRecetaRetenida(SanitizaTextoMixin, models.Model):
     def rechazar(self, jefe, observacion):
         if not (
             jefe.is_superuser
-            or jefe.groups.filter(name=GRUPO_JEFE_FARMACIA).exists()
+            or jefe.groups.filter(name__in=GRUPOS_JEFE_FARMACIA).exists()
         ):
             raise PermissionDenied(
                 "Solo el Jefe de Farmacia puede rechazar una receta."
@@ -624,7 +629,7 @@ class AutorizacionExcepcional(SanitizaTextoMixin, models.Model):
         on_delete=models.PROTECT,
         related_name="autorizaciones_excepcionales_recetas",
         limit_choices_to=(
-            Q(groups__name=GRUPO_JEFE_FARMACIA) | Q(is_superuser=True)
+            Q(groups__name__in=GRUPOS_JEFE_FARMACIA) | Q(is_superuser=True)
         ),
         null=True,
         blank=True,
@@ -682,7 +687,9 @@ class AutorizacionExcepcional(SanitizaTextoMixin, models.Model):
             )
         if self.jefe_farmacia_id and not (
             self.jefe_farmacia.is_superuser
-            or self.jefe_farmacia.groups.filter(name=GRUPO_JEFE_FARMACIA).exists()
+            or self.jefe_farmacia.groups.filter(
+                name__in=GRUPOS_JEFE_FARMACIA
+            ).exists()
         ):
             errores["jefe_farmacia"] = (
                 "El usuario debe pertenecer al grupo Jefe de Farmacia."
@@ -701,7 +708,7 @@ class AutorizacionExcepcional(SanitizaTextoMixin, models.Model):
     def resolver(self, jefe, aprobado, respuesta=""):
         if not (
             jefe.is_superuser
-            or jefe.groups.filter(name=GRUPO_JEFE_FARMACIA).exists()
+            or jefe.groups.filter(name__in=GRUPOS_JEFE_FARMACIA).exists()
         ):
             raise PermissionDenied(
                 "Solo el Jefe de Farmacia puede resolver excepciones."
@@ -905,8 +912,31 @@ class Medicamento(SanitizaTextoMixin, models.Model):
         return f"{self.nombre} ({self.codigo})"
 
 
+class Proveedor(SanitizaTextoMixin, models.Model):
+    campos_texto_sanitizables = ("nombre", "rut")
+
+    nombre = models.CharField("Nombre", max_length=200, unique=True)
+    rut = models.CharField("RUT", max_length=12, blank=True)
+    activo = models.BooleanField("Activo", default=True)
+
+    class Meta:
+        verbose_name = "proveedor"
+        verbose_name_plural = "proveedores"
+        ordering = ("nombre",)
+
+    def clean(self):
+        super().clean()
+        self.nombre = normalizar_texto_seguro(self.nombre).strip()
+        self.rut = normalizar_texto_seguro(self.rut).strip()
+        if not self.nombre:
+            raise ValidationError({"nombre": "Indica el nombre del proveedor."})
+
+    def __str__(self):
+        return self.nombre
+
+
 class IngresoInventario(SanitizaTextoMixin, models.Model):
-    campos_texto_sanitizables = ("lote", "proveedor")
+    campos_texto_sanitizables = ("lote",)
 
     medicamento = models.ForeignKey(
         Medicamento,
@@ -929,7 +959,11 @@ class IngresoInventario(SanitizaTextoMixin, models.Model):
         validators=[MaxValueValidator(MAX_POSITIVE_INTEGER)],
     )
     fecha_vencimiento = models.DateField("Fecha de vencimiento")
-    proveedor = models.CharField("Proveedor", max_length=200, blank=True)
+    proveedor = models.ForeignKey(
+        Proveedor,
+        on_delete=models.PROTECT,
+        verbose_name="Proveedor",
+    )
     fecha_ingreso = models.DateTimeField("Fecha de ingreso", auto_now_add=True)
     registrado_por = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -956,7 +990,6 @@ class IngresoInventario(SanitizaTextoMixin, models.Model):
     def clean(self):
         super().clean()
         self.lote = normalizar_texto_seguro(self.lote).strip()
-        self.proveedor = normalizar_texto_seguro(self.proveedor).strip()
         if (
             self.fecha_vencimiento
             and self.fecha_vencimiento < timezone.localdate()
@@ -982,9 +1015,111 @@ class IngresoInventario(SanitizaTextoMixin, models.Model):
                 )
         super().save(*args, **kwargs)
 
+    def ajustar_stock(self, usuario, cantidad_nueva, fecha_vencimiento_nueva, motivo):
+        if not usuario.is_active or not (
+            usuario.is_superuser
+            or usuario.groups.filter(name__in=GRUPOS_JEFE_FARMACIA).exists()
+        ):
+            raise PermissionDenied(
+                "Solo el Jefe de Farmacia puede ajustar el inventario."
+            )
+        if (
+            isinstance(cantidad_nueva, bool)
+            or not isinstance(cantidad_nueva, int)
+            or not 1 <= cantidad_nueva <= MAX_POSITIVE_INTEGER
+        ):
+            raise ValidationError(
+                {"cantidad": "La cantidad debe ser un entero positivo válido."}
+            )
+        if not isinstance(fecha_vencimiento_nueva, date):
+            raise ValidationError(
+                {"fecha_vencimiento": "Indica una fecha de vencimiento válida."}
+            )
+
+        motivo = normalizar_texto_seguro(motivo or "").strip()
+        if not motivo:
+            raise ValidationError({"motivo": "Indica el motivo del ajuste."})
+        if len(motivo) > MAX_MOTIVO_AJUSTE_LENGTH:
+            raise ValidationError(
+                {"motivo": "El motivo supera el máximo permitido."}
+            )
+
+        with transaction.atomic():
+            lote = type(self).objects.select_for_update().get(pk=self.pk)
+            if (
+                cantidad_nueva == lote.cantidad
+                and fecha_vencimiento_nueva == lote.fecha_vencimiento
+            ):
+                raise ValidationError(
+                    {"__all__": "No hay cambios que registrar para este lote."}
+                )
+            motivo_auditoria = (
+                f"{motivo}\nCantidad recibida corregida de {lote.cantidad} a "
+                f"{cantidad_nueva}; vencimiento corregido de "
+                f"{lote.fecha_vencimiento.isoformat()} a "
+                f"{fecha_vencimiento_nueva.isoformat()}."
+            )
+            if len(motivo_auditoria) > MAX_MOTIVO_AJUSTE_LENGTH:
+                raise ValidationError(
+                    {"motivo": "El motivo supera el máximo permitido."}
+                )
+
+            stock_anterior = lote.stock_disponible
+            stock_nuevo = stock_anterior + cantidad_nueva - lote.cantidad
+            if stock_nuevo < 0:
+                raise ValidationError(
+                    {
+                        "cantidad": (
+                            "La reducción supera el stock disponible; "
+                            "no se puede dejar el inventario negativo."
+                        )
+                    }
+                )
+            if stock_nuevo > MAX_POSITIVE_INTEGER:
+                raise ValidationError(
+                    {"cantidad": "El ajuste supera el máximo de stock permitido."}
+                )
+
+            actualizado = type(self).objects.filter(
+                pk=lote.pk,
+                cantidad=lote.cantidad,
+                stock_disponible=stock_anterior,
+                fecha_vencimiento=lote.fecha_vencimiento,
+            ).update(
+                cantidad=cantidad_nueva,
+                stock_disponible=stock_nuevo,
+                fecha_vencimiento=fecha_vencimiento_nueva,
+            )
+            if not actualizado:
+                raise ValidationError(
+                    {"__all__": "El lote cambió; recarga la página y reintenta."}
+                )
+
+            AuditoriaInventario.objects.create(
+                usuario=usuario,
+                lote=lote,
+                tipo_ajuste=(
+                    AuditoriaInventario.TipoAjuste.REDUCCION_STOCK
+                    if cantidad_nueva < lote.cantidad
+                    else AuditoriaInventario.TipoAjuste.CORRECCION_INGRESO
+                ),
+                cantidad_anterior=stock_anterior,
+                cantidad_nueva=stock_nuevo,
+                motivo=motivo_auditoria,
+            )
+
+        self.cantidad = cantidad_nueva
+        self.stock_disponible = stock_nuevo
+        self.fecha_vencimiento = fecha_vencimiento_nueva
+
     @property
     def mermas_totales(self):
-        return self.mermas.aggregate(total=Sum("cantidad"))["total"] or 0
+        return (
+            self.mermas.filter(revertida=False).aggregate(total=Sum("cantidad"))[
+                "total"
+            ]
+            or 0
+        )
 
     def __str__(self):
         return f"{self.medicamento} — Lote {self.lote}"
@@ -1015,6 +1150,11 @@ class Merma(SanitizaTextoMixin, models.Model):
     motivo = models.CharField("Motivo", max_length=12, choices=Motivo.choices)
     observacion = models.TextField("Observación", max_length=2000)
     fecha_registro = models.DateTimeField("Fecha de registro", auto_now_add=True)
+    revertida = models.BooleanField(
+        "Merma revertida",
+        default=False,
+        editable=False,
+    )
     registrado_por = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
@@ -1035,6 +1175,10 @@ class Merma(SanitizaTextoMixin, models.Model):
 
     def clean(self):
         super().clean()
+        if self._state.adding and self.revertida:
+            raise ValidationError(
+                {"revertida": "Una merma nueva no puede crearse como revertida."}
+            )
         self.observacion = normalizar_texto_seguro(
             self.observacion or ""
         ).strip()
@@ -1082,8 +1226,166 @@ class Merma(SanitizaTextoMixin, models.Model):
             )
             super().save(*args, **kwargs)
 
+    def revertir(self, usuario, motivo):
+        if not usuario.is_active or not (
+            usuario.is_superuser
+            or usuario.groups.filter(name__in=GRUPOS_JEFE_FARMACIA).exists()
+        ):
+            raise PermissionDenied(
+                "Solo el Jefe de Farmacia puede revertir una merma."
+            )
+        motivo = normalizar_texto_seguro(motivo or "").strip()
+        if not motivo:
+            raise ValidationError({"motivo": "Indica el motivo de la reversión."})
+        if len(motivo) > MAX_MOTIVO_AJUSTE_LENGTH:
+            raise ValidationError(
+                {"motivo": "El motivo supera el máximo permitido."}
+            )
+
+        try:
+            with transaction.atomic():
+                lote = IngresoInventario.objects.select_for_update().get(
+                    pk=self.ingreso_id
+                )
+                merma = type(self).objects.select_for_update().get(pk=self.pk)
+                if merma.revertida or AuditoriaInventario.objects.filter(
+                    merma=merma,
+                    tipo_ajuste=AuditoriaInventario.TipoAjuste.REVERSION_MERMA,
+                ).exists():
+                    raise ValidationError("Esta merma ya fue revertida.")
+
+                stock_anterior = lote.stock_disponible
+                stock_nuevo = stock_anterior + merma.cantidad
+                if stock_nuevo > MAX_POSITIVE_INTEGER:
+                    raise ValidationError(
+                        "La reversión supera el máximo de stock permitido."
+                    )
+
+                actualizado = IngresoInventario.objects.filter(
+                    pk=lote.pk,
+                    stock_disponible=stock_anterior,
+                ).update(stock_disponible=stock_nuevo)
+                if not actualizado:
+                    raise ValidationError(
+                        "El stock del lote cambió; recarga la página y reintenta."
+                    )
+                merma_actualizada = type(self).objects.filter(
+                    pk=merma.pk,
+                    revertida=False,
+                ).update(revertida=True)
+                if not merma_actualizada:
+                    raise ValidationError("Esta merma ya fue revertida.")
+
+                AuditoriaInventario.objects.create(
+                    usuario=usuario,
+                    lote=lote,
+                    merma=merma,
+                    tipo_ajuste=AuditoriaInventario.TipoAjuste.REVERSION_MERMA,
+                    cantidad_anterior=stock_anterior,
+                    cantidad_nueva=stock_nuevo,
+                    motivo=motivo,
+                )
+        except IntegrityError as error:
+            raise ValidationError(
+                "Esta merma ya tiene una reversión registrada."
+            ) from error
+
+        self.revertida = True
+
     def __str__(self):
         return f"Merma de {self.cantidad} unidades — {self.ingreso}"
+
+
+class AuditoriaInventario(models.Model):
+    class TipoAjuste(models.TextChoices):
+        CORRECCION_INGRESO = "CORRECCION_INGRESO", "Corrección de ingreso"
+        REDUCCION_STOCK = "REDUCCION_STOCK", "Reducción de stock"
+        REVERSION_MERMA = "REVERSION_MERMA", "Reversión de merma"
+
+    usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="auditorias_inventario",
+        verbose_name="Usuario",
+    )
+    lote = models.ForeignKey(
+        IngresoInventario,
+        on_delete=models.PROTECT,
+        related_name="auditorias",
+        verbose_name="Lote de inventario",
+    )
+    merma = models.ForeignKey(
+        Merma,
+        on_delete=models.PROTECT,
+        related_name="auditorias_reversion",
+        null=True,
+        blank=True,
+        verbose_name="Merma revertida",
+    )
+    tipo_ajuste = models.CharField(
+        "Tipo de ajuste",
+        max_length=24,
+        choices=TipoAjuste.choices,
+    )
+    cantidad_anterior = models.IntegerField(
+        "Stock anterior",
+        validators=[
+            MinValueValidator(0),
+            MaxValueValidator(MAX_POSITIVE_INTEGER),
+        ],
+    )
+    cantidad_nueva = models.IntegerField(
+        "Stock nuevo",
+        validators=[
+            MinValueValidator(0),
+            MaxValueValidator(MAX_POSITIVE_INTEGER),
+        ],
+    )
+    motivo = models.TextField(
+        "Motivo",
+        max_length=MAX_MOTIVO_AJUSTE_LENGTH,
+    )
+    fecha_registro = models.DateTimeField("Fecha de registro", auto_now_add=True)
+
+    class Meta:
+        verbose_name = "auditoría de inventario"
+        verbose_name_plural = "auditorías de inventario"
+        ordering = ("-fecha_registro", "-pk")
+        constraints = [
+            models.CheckConstraint(
+                check=Q(cantidad_anterior__gte=0, cantidad_nueva__gte=0),
+                name="auditoria_inventario_cantidades_no_negativas",
+            ),
+            models.UniqueConstraint(
+                fields=("merma",),
+                condition=Q(tipo_ajuste="REVERSION_MERMA"),
+                name="auditoria_reversion_merma_unica",
+            ),
+        ]
+
+    def clean(self):
+        super().clean()
+        self.motivo = normalizar_texto_seguro(self.motivo or "").strip()
+        if not self.motivo:
+            raise ValidationError({"motivo": "La justificación es obligatoria."})
+        if self.tipo_ajuste == self.TipoAjuste.REVERSION_MERMA:
+            if not self.merma_id or self.merma.ingreso_id != self.lote_id:
+                raise ValidationError(
+                    {"merma": "La reversión debe identificar una merma del mismo lote."}
+                )
+        elif self.merma_id:
+            raise ValidationError(
+                {"merma": "Solo una reversión puede asociar una merma."}
+            )
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            raise ValidationError("Los registros de auditoría son inmutables.")
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.get_tipo_ajuste_display()} — {self.lote}"
 
 
 class ConsultaJefeFarmacia(SanitizaTextoMixin, models.Model):
@@ -1166,7 +1468,7 @@ class ConsultaJefeFarmacia(SanitizaTextoMixin, models.Model):
         if self.jefe_farmacia_id and not (
             self.jefe_farmacia.is_superuser
             or self.jefe_farmacia.groups.filter(
-                name=GRUPO_JEFE_FARMACIA
+                name__in=GRUPOS_JEFE_FARMACIA
             ).exists()
         ):
             errores["jefe_farmacia"] = (
@@ -1178,7 +1480,7 @@ class ConsultaJefeFarmacia(SanitizaTextoMixin, models.Model):
     def responder(self, jefe, respuesta):
         if not (
             jefe.is_superuser
-            or jefe.groups.filter(name=GRUPO_JEFE_FARMACIA).exists()
+            or jefe.groups.filter(name__in=GRUPOS_JEFE_FARMACIA).exists()
         ):
             raise PermissionDenied(
                 "Solo el Jefe de Farmacia puede responder estas consultas."

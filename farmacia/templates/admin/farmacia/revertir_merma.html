@@ -1,0 +1,23 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+    <div class="module aligned">
+        <h2>Revertir merma</h2>
+        <p>
+            <strong>{{ merma.ingreso.medicamento }}</strong> · Lote
+            {{ merma.ingreso.lote }} · Unidades: {{ merma.cantidad }}
+        </p>
+        <p>
+            La merma original no se elimina. Se marcará como revertida y se
+            reintegrarán las unidades al stock del lote con auditoría.
+        </p>
+        <form method="post">
+            {% csrf_token %}
+            {{ form.as_p }}
+            <div class="submit-row">
+                <button class="default" type="submit">Confirmar reversión</button>
+                <a class="button cancel-link" href="{{ changelist_url }}">Cancelar</a>
+            </div>
+        </form>
+    </div>
+{% endblock %}

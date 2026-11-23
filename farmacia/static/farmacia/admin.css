@@ -1135,3 +1135,53 @@ button {
 body.dashboard #content > h1 {
     display: none;
 }
+
+.inventario-dialog {
+    width: min(94vw, 560px);
+    max-height: 90vh;
+    padding: 24px;
+    border: 1px solid #cbd8cf;
+    border-radius: 10px;
+    color: #17251d;
+    background: #fff;
+    box-shadow: 0 16px 48px rgb(16 45 34 / 28%);
+}
+
+.inventario-dialog::backdrop {
+    background: rgb(18 38 29 / 56%);
+}
+
+.inventario-dialog h2 {
+    margin: 0 0 16px;
+    color: #1d382d;
+}
+
+.inventario-dialog label {
+    display: block;
+    margin: 13px 0 5px;
+    color: #263a30;
+    font-weight: 650;
+}
+
+.inventario-dialog input,
+.inventario-dialog textarea {
+    box-sizing: border-box;
+    width: 100%;
+    padding: 9px 10px;
+    border: 1px solid #aebfb3;
+    border-radius: 5px;
+    color: #17251d;
+    background: #fff;
+    font: inherit;
+}
+
+.inventario-dialog-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 9px;
+    margin-top: 18px;
+}
+
+.inventario-dialog-actions button {
+    min-height: 38px;
+}

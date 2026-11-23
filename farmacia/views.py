@@ -14,6 +14,7 @@ from django.contrib.auth.views import LoginView
 from django.core.cache import cache
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, connection, transaction
+from django.db.models.deletion import ProtectedError
 from django.core.paginator import EmptyPage, Paginator
 from django.http import (
     FileResponse,
@@ -30,19 +31,24 @@ from django.utils.decorators import method_decorator
 from django.utils import timezone
 from django.utils.crypto import constant_time_compare
 from django.utils.http import url_has_allowed_host_and_scheme
-from django.views.decorators.http import require_GET, require_http_methods
+from django.views.decorators.http import (
+    require_GET,
+    require_http_methods,
+    require_POST,
+)
 from redis.exceptions import RedisError
 
 from config.error_handlers import manejar_bloqueo_base_datos
 from farmacia.auth_forms import EmployeeAuthenticationForm
 from farmacia.models import (
     GRUPO_FARMACEUTICO,
-    GRUPO_JEFE_FARMACIA,
+    GRUPOS_JEFE_FARMACIA,
     AutorizacionExcepcional,
     ConsultaJefeFarmacia,
     IngresoInventario,
     MAX_UNIDADES_POR_RECETA,
     Medicamento,
+    Merma,
     SimulacionPago,
     DetalleVentaCaja,
     VentaRecetaRetenida,
@@ -50,6 +56,7 @@ from farmacia.models import (
     normalizar_texto_seguro,
 )
 from farmacia.consulta_forms import ConsultaJefeFarmaciaForm
+from farmacia.inventario_forms import AjustarStockLoteForm, RevertirMermaForm
 from farmacia.receta_forms import (
     ResolverAutorizacionForm,
     RevisionRecetaForm,
@@ -57,6 +64,20 @@ from farmacia.receta_forms import (
 )
 
 logger = logging.getLogger(__name__)
+
+MAX_SOLICITUDES_PENDIENTES_POR_USUARIO = 3
+COOLDOWN_SOLICITUD_SEGUNDOS = 120
+MENSAJE_LIMITE_SOLICITUDES = (
+    "Has alcanzado el límite de 3 solicitudes pendientes. "
+    "Espera la respuesta del Jefe de Farmacia."
+)
+MENSAJE_COOLDOWN_SOLICITUD = (
+    "Debes esperar 2 minutos antes de enviar otra solicitud."
+)
+INTENTOS_MAXIMOS_ELIMINAR_CONSULTA = 5
+VENTANA_RATE_LIMIT_ELIMINAR_CONSULTA = 60
+INTENTOS_MAXIMOS_AJUSTE_INVENTARIO = 5
+VENTANA_RATE_LIMIT_AJUSTE_INVENTARIO = 60
 
 
 def _incrementar_contador_rate_limit(clave, ventana):
@@ -150,6 +171,111 @@ def limitar_frecuencia_solicitudes(scope, methods=("POST",)):
     return decorator
 
 
+def _respuesta_cache_solicitudes_no_disponible():
+    respuesta = HttpResponse(
+        "<!doctype html><title>Servicio no disponible</title>"
+        "<h1>Servicio no disponible</h1>"
+        "<p>No se pudo verificar el límite de solicitudes. Intenta nuevamente.</p>",
+        status=503,
+    )
+    respuesta["Retry-After"] = "2"
+    respuesta["Cache-Control"] = "no-store"
+    return respuesta
+
+
+def _bloquear_solicitud_si_corresponde(
+    request,
+    *,
+    clave_cooldown,
+    solicitudes_pendientes,
+    vista,
+):
+    try:
+        en_cooldown = cache.get(clave_cooldown)
+    except RedisError:
+        logger.exception("El caché del cooldown de solicitudes no responde.")
+        return _respuesta_cache_solicitudes_no_disponible()
+
+    if en_cooldown:
+        messages.error(request, MENSAJE_COOLDOWN_SOLICITUD)
+        return redirect(vista)
+
+    if solicitudes_pendientes.count() >= MAX_SOLICITUDES_PENDIENTES_POR_USUARIO:
+        messages.error(request, MENSAJE_LIMITE_SOLICITUDES)
+        return redirect(vista)
+
+    return None
+
+
+def _reservar_cooldown_solicitud(request, clave_cooldown, vista):
+    try:
+        reservada = cache.add(
+            clave_cooldown,
+            "enviando",
+            timeout=COOLDOWN_SOLICITUD_SEGUNDOS,
+        )
+    except RedisError:
+        logger.exception("No se pudo reservar el cooldown de solicitudes.")
+        return _respuesta_cache_solicitudes_no_disponible()
+
+    if not reservada:
+        messages.error(request, MENSAJE_COOLDOWN_SOLICITUD)
+        return redirect(vista)
+
+    return None
+
+
+def _liberar_cooldown_solicitud(clave_cooldown):
+    try:
+        cache.delete(clave_cooldown)
+    except RedisError:
+        logger.exception("No se pudo liberar el cooldown de una solicitud fallida.")
+
+
+def _respuesta_limite_ajustes_inventario(request):
+    mensaje = "Se superó el límite de 5 intentos. Espera un minuto antes de reintentar."
+    if "application/json" in request.headers.get("Accept", "").lower():
+        respuesta = JsonResponse(
+            {"error": "rate_limited", "message": mensaje},
+            status=429,
+        )
+    else:
+        respuesta = HttpResponse(
+            "<!doctype html><title>Demasiados intentos</title>"
+            "<h1>Demasiados intentos</h1>"
+            "<p>Espera un minuto antes de reintentar.</p>",
+            status=429,
+        )
+    respuesta["Retry-After"] = str(VENTANA_RATE_LIMIT_AJUSTE_INVENTARIO)
+    respuesta["Cache-Control"] = "no-store"
+    return respuesta
+
+
+def limitar_ajustes_inventario(view):
+    @wraps(view)
+    def wrapped(request, *args, **kwargs):
+        if request.method != "POST":
+            return view(request, *args, **kwargs)
+
+        clave = f"farmacia:rate:ajuste-inventario:usuario:{request.user.pk}"
+        try:
+            intentos = _incrementar_contador_rate_limit(
+                clave,
+                VENTANA_RATE_LIMIT_AJUSTE_INVENTARIO,
+            )
+        except RedisError:
+            logger.exception(
+                "El caché del límite de ajustes de inventario no responde."
+            )
+            return _respuesta_cache_solicitudes_no_disponible()
+
+        if intentos > INTENTOS_MAXIMOS_AJUSTE_INVENTARIO:
+            return _respuesta_limite_ajustes_inventario(request)
+        return view(request, *args, **kwargs)
+
+    return wrapped
+
+
 @method_decorator(limitar_frecuencia_solicitudes("login"), name="dispatch")
 class IniciarSesionView(LoginView):
     template_name = "farmacia/login.html"
@@ -179,7 +305,7 @@ def _es_personal_farmacia(user):
         and (
             user.is_superuser
             or user.groups.filter(
-                name__in=(GRUPO_FARMACEUTICO, GRUPO_JEFE_FARMACIA)
+                name__in=(GRUPO_FARMACEUTICO, *GRUPOS_JEFE_FARMACIA)
             ).exists()
         )
     )
@@ -249,8 +375,219 @@ def _validar_payload_formulario(request, campos, archivos=()):
 def _es_jefe_farmacia(user):
     return user.is_authenticated and (
         user.is_superuser
-        or user.groups.filter(name=GRUPO_JEFE_FARMACIA).exists()
+        or user.groups.filter(name__in=GRUPOS_JEFE_FARMACIA).exists()
     )
+
+
+def _jefe_farmacia_required(view):
+    @wraps(view)
+    def wrapped(request, *args, **kwargs):
+        if not _es_jefe_farmacia(request.user):
+            raise PermissionDenied
+        return view(request, *args, **kwargs)
+
+    return wrapped
+
+
+def _agregar_errores_validacion(form, error):
+    if hasattr(error, "message_dict"):
+        for campo, errores in error.message_dict.items():
+            destino = campo if campo in form.fields else None
+            for mensaje in errores:
+                form.add_error(destino, mensaje)
+        return
+    for mensaje in error.messages:
+        form.add_error(None, mensaje)
+
+
+@login_required
+@_jefe_farmacia_required
+@limitar_ajustes_inventario
+@require_http_methods(["GET", "POST"])
+@manejar_bloqueo_base_datos
+def ajustar_stock_lote(request, lote_id):
+    lote = get_object_or_404(
+        IngresoInventario.objects.select_related("medicamento", "proveedor"),
+        pk=lote_id,
+    )
+    if request.method == "POST":
+        error_payload = _validar_payload_formulario(
+            request,
+            (
+                "cantidad",
+                "fecha_vencimiento",
+                "motivo",
+                "password_confirmacion",
+            ),
+        )
+        if error_payload:
+            return error_payload
+        campos_permitidos = {
+            "cantidad",
+            "fecha_vencimiento",
+            "motivo",
+            "password_confirmacion",
+            "csrfmiddlewaretoken",
+        }
+        if set(request.POST.keys()).difference(campos_permitidos):
+            return HttpResponseBadRequest(
+                "La solicitud incluye campos no admitidos."
+            )
+        form = AjustarStockLoteForm(request.POST)
+        if form.is_valid():
+            if not request.user.check_password(
+                form.cleaned_data["password_confirmacion"]
+            ):
+                messages.error(
+                    request,
+                    "Contraseña de confirmación incorrecta.",
+                )
+            else:
+                try:
+                    lote.ajustar_stock(
+                        usuario=request.user,
+                        cantidad_nueva=form.cleaned_data["cantidad"],
+                        fecha_vencimiento_nueva=form.cleaned_data[
+                            "fecha_vencimiento"
+                        ],
+                        motivo=form.cleaned_data["motivo"],
+                    )
+                except ValidationError as error:
+                    _agregar_errores_validacion(form, error)
+                else:
+                    messages.success(
+                        request,
+                        f"El lote {lote.lote} fue corregido y quedó registrado en auditoría.",
+                    )
+                    return redirect("admin:farmacia_ingresoinventario_changelist")
+        status = 400
+    else:
+        form = AjustarStockLoteForm(
+            initial={
+                "cantidad": lote.cantidad,
+                "fecha_vencimiento": lote.fecha_vencimiento,
+            }
+        )
+        status = 200
+
+    return render(
+        request,
+        "admin/farmacia/ajustar_stock_lote.html",
+        {
+            "form": form,
+            "lote": lote,
+            "changelist_url": reverse(
+                "admin:farmacia_ingresoinventario_changelist"
+            ),
+            "title": "Corregir lote y stock",
+        },
+        status=status,
+    )
+
+
+@login_required
+@_jefe_farmacia_required
+@limitar_ajustes_inventario
+@require_POST
+@manejar_bloqueo_base_datos
+def revertir_merma(request, merma_id):
+    merma = get_object_or_404(
+        Merma.objects.select_related(
+            "ingreso__medicamento",
+            "registrado_por",
+        ),
+        pk=merma_id,
+    )
+    error_payload = _validar_payload_formulario(
+        request,
+        ("motivo", "password_confirmacion"),
+    )
+    if error_payload:
+        return error_payload
+    if set(request.POST.keys()).difference(
+        {"motivo", "password_confirmacion", "csrfmiddlewaretoken"}
+    ):
+        return HttpResponseBadRequest(
+            "La solicitud incluye campos no admitidos."
+        )
+
+    form = RevertirMermaForm(request.POST)
+    if form.is_valid():
+        if not request.user.check_password(
+            form.cleaned_data["password_confirmacion"]
+        ):
+            messages.error(
+                request,
+                "Contraseña de confirmación incorrecta.",
+            )
+        else:
+            try:
+                merma.revertir(
+                    usuario=request.user,
+                    motivo=form.cleaned_data["motivo"],
+                )
+            except ValidationError as error:
+                _agregar_errores_validacion(form, error)
+            else:
+                messages.success(
+                    request,
+                    f"La merma #{merma.pk} fue revertida y quedó registrada en auditoría.",
+                )
+                return redirect("admin:farmacia_merma_changelist")
+
+    return render(
+        request,
+        "admin/farmacia/revertir_merma.html",
+        {
+            "form": form,
+            "merma": merma,
+            "changelist_url": reverse("admin:farmacia_merma_changelist"),
+            "title": "Revertir merma",
+        },
+        status=400,
+    )
+
+
+def _respuesta_limite_eliminar_consulta(request):
+    mensaje = "Se superó el límite de intentos. Espera un minuto antes de reintentar."
+    if "application/json" in request.headers.get("Accept", "").lower():
+        respuesta = JsonResponse(
+            {"error": "rate_limited", "message": mensaje},
+            status=429,
+        )
+    else:
+        respuesta = HttpResponse(
+            "<!doctype html><title>Demasiados intentos</title>"
+            "<h1>Demasiados intentos</h1><p>Espera un minuto antes de reintentar.</p>",
+            status=429,
+        )
+    respuesta["Retry-After"] = str(VENTANA_RATE_LIMIT_ELIMINAR_CONSULTA)
+    respuesta["Cache-Control"] = "no-store"
+    return respuesta
+
+
+def _url_gestion_inventario(user):
+    if user.is_superuser or user.groups.filter(
+        name__in=GRUPOS_JEFE_FARMACIA
+    ).exists():
+        return reverse("admin:farmacia_ingresoinventario_changelist")
+
+    puede_ver_ingresos = user.has_perm("farmacia.view_ingresoinventario")
+    puede_modificar_ingresos = user.has_perm(
+        "farmacia.change_ingresoinventario"
+    )
+    if puede_ver_ingresos or puede_modificar_ingresos:
+        return reverse("admin:farmacia_ingresoinventario_changelist")
+    if user.has_perm("farmacia.add_ingresoinventario"):
+        return reverse("admin:farmacia_ingresoinventario_add")
+    return None
+
+
+def _eliminar_archivo_consulta(almacen, nombre):
+    try:
+        almacen.delete(nombre)
+    except OSError:
+        logger.exception("No se pudo eliminar la imagen de una consulta eliminada.")
 
 
 def _es_auditor_qf(user):
@@ -263,7 +600,7 @@ def _revisor_receta_valido(receta):
     revisor = receta.revisado_por
     return (
         revisor.is_superuser
-        or revisor.groups.filter(name=GRUPO_JEFE_FARMACIA).exists()
+        or revisor.groups.filter(name__in=GRUPOS_JEFE_FARMACIA).exists()
         or (
             revisor.groups.filter(name=GRUPO_FARMACEUTICO).exists()
             and receta.auditor_qf_id == revisor.pk
@@ -329,9 +666,10 @@ def inicio_farmacia(request):
             "consultas_jefe_disponible": (
                 request.user.is_superuser
                 or request.user.groups.filter(
-                    name__in=(GRUPO_FARMACEUTICO, GRUPO_JEFE_FARMACIA)
+                    name__in=(GRUPO_FARMACEUTICO, *GRUPOS_JEFE_FARMACIA)
                 ).exists()
             ),
+            "url_gestion_inventario": _url_gestion_inventario(request.user),
         },
     )
 
@@ -360,6 +698,24 @@ def recetas_retenidas(request):
 
     form = None
     if request.method == "POST":
+        if es_jefe or not es_auditor:
+            raise PermissionDenied
+
+        clave_cooldown = (
+            f"farmacia:cooldown:receta-retenida:{request.user.pk}"
+        )
+        respuesta = _bloquear_solicitud_si_corresponde(
+            request,
+            clave_cooldown=clave_cooldown,
+            solicitudes_pendientes=VentaRecetaRetenida.objects.filter(
+                auditor_qf=request.user,
+                estado=VentaRecetaRetenida.Estado.PENDIENTE_REVISION,
+            ),
+            vista="farmacia:recetas_retenidas",
+        )
+        if respuesta:
+            return respuesta
+
         respuesta = _validar_payload_formulario(
             request,
             (
@@ -373,23 +729,43 @@ def recetas_retenidas(request):
         )
         if respuesta:
             return respuesta
-        if es_jefe or not es_auditor:
-            raise PermissionDenied
         form = VentaRecetaRetenidaForm(request.POST, request.FILES)
         if form.is_valid():
+            respuesta = _reservar_cooldown_solicitud(
+                request,
+                clave_cooldown,
+                "farmacia:recetas_retenidas",
+            )
+            if respuesta:
+                return respuesta
+
             venta = form.save(commit=False)
             venta.auditor_qf = request.user
-            with transaction.atomic():
-                venta.save()
-                if venta.cantidad > MAX_UNIDADES_POR_RECETA:
-                    autorizacion = AutorizacionExcepcional(
-                        venta=venta,
-                        tipo=AutorizacionExcepcional.Tipo.TOPE_MEDICAMENTOS,
-                        motivo=form.cleaned_data["motivo_excepcion"],
-                        solicitada_por=request.user,
-                    )
-                    autorizacion.full_clean()
-                    autorizacion.save()
+            guardado = False
+            try:
+                with transaction.atomic():
+                    venta.save()
+                    if venta.cantidad > MAX_UNIDADES_POR_RECETA:
+                        autorizacion = AutorizacionExcepcional(
+                            venta=venta,
+                            tipo=AutorizacionExcepcional.Tipo.TOPE_MEDICAMENTOS,
+                            motivo=form.cleaned_data["motivo_excepcion"],
+                            solicitada_por=request.user,
+                        )
+                        autorizacion.full_clean()
+                        autorizacion.save()
+                guardado = True
+            finally:
+                if not guardado:
+                    _liberar_cooldown_solicitud(clave_cooldown)
+            try:
+                cache.set(
+                    clave_cooldown,
+                    "enviado",
+                    timeout=COOLDOWN_SOLICITUD_SEGUNDOS,
+                )
+            except RedisError:
+                logger.exception("No se pudo extender el cooldown de la receta.")
             messages.success(
                 request,
                 f"Receta #{venta.pk} enviada al Jefe de Farmacia para revisión.",
@@ -453,6 +829,7 @@ def recetas_retenidas(request):
         "farmacia/recetas_retenidas.html",
         {
             "es_jefe": es_jefe,
+            "url_gestion_inventario": _url_gestion_inventario(request.user),
             "form": form,
             "pendientes": pendientes,
             "historial": historial,
@@ -598,27 +975,20 @@ def consultas_jefe_farmacia(request):
     if not (
         request.user.is_superuser
         or request.user.groups.filter(
-            name__in=(GRUPO_FARMACEUTICO, GRUPO_JEFE_FARMACIA)
+            name__in=(GRUPO_FARMACEUTICO, *GRUPOS_JEFE_FARMACIA)
         ).exists()
     ):
         raise PermissionDenied
 
     es_jefe = _es_jefe_farmacia(request.user)
     if request.method == "POST":
-        respuesta = _validar_payload_formulario(
-            request,
-            (
-                "consulta_id",
-                "respuesta",
-                "asunto",
-                "pregunta",
-            ),
-            ("foto_receta",),
-        )
-        if respuesta:
-            return respuesta
-
         if es_jefe:
+            respuesta = _validar_payload_formulario(
+                request,
+                ("consulta_id", "respuesta"),
+            )
+            if respuesta:
+                return respuesta
             consulta_id = _parse_primary_key(
                 ConsultaJefeFarmacia,
                 request.POST.get("consulta_id"),
@@ -639,11 +1009,58 @@ def consultas_jefe_farmacia(request):
 
         if not request.user.groups.filter(name=GRUPO_FARMACEUTICO).exists():
             raise PermissionDenied
+
+        clave_cooldown = (
+            f"farmacia:cooldown:consulta-jefe:{request.user.pk}"
+        )
+        respuesta = _bloquear_solicitud_si_corresponde(
+            request,
+            clave_cooldown=clave_cooldown,
+            solicitudes_pendientes=ConsultaJefeFarmacia.objects.filter(
+                solicitante=request.user,
+                estado=ConsultaJefeFarmacia.Estado.PENDIENTE,
+            ),
+            vista="farmacia:consultas_jefe",
+        )
+        if respuesta:
+            return respuesta
+
+        respuesta = _validar_payload_formulario(
+            request,
+            ("asunto", "pregunta"),
+            ("foto_receta",),
+        )
+        if respuesta:
+            return respuesta
+
         form = ConsultaJefeFarmaciaForm(request.POST, request.FILES)
         if form.is_valid():
+            respuesta = _reservar_cooldown_solicitud(
+                request,
+                clave_cooldown,
+                "farmacia:consultas_jefe",
+            )
+            if respuesta:
+                return respuesta
+
             consulta = form.save(commit=False)
             consulta.solicitante = request.user
-            consulta.save()
+            guardado = False
+            try:
+                with transaction.atomic():
+                    consulta.save()
+                guardado = True
+            finally:
+                if not guardado:
+                    _liberar_cooldown_solicitud(clave_cooldown)
+            try:
+                cache.set(
+                    clave_cooldown,
+                    "enviado",
+                    timeout=COOLDOWN_SOLICITUD_SEGUNDOS,
+                )
+            except RedisError:
+                logger.exception("No se pudo extender el cooldown de la consulta.")
             messages.success(
                 request,
                 f"Tu consulta #{consulta.pk} fue enviada al Jefe de Farmacia.",
@@ -689,8 +1106,61 @@ def consultas_jefe_farmacia(request):
             "pendientes": pendientes,
             "historial": historial,
             "consultas_pendientes": consultas_pendientes,
+            "url_gestion_inventario": _url_gestion_inventario(request.user),
         },
     )
+
+
+@manejar_bloqueo_base_datos
+@login_required
+@_jefe_farmacia_required
+@require_POST
+def eliminar_consulta_jefe(request, consulta_id):
+    clave_intentos = (
+        f"farmacia:rate:eliminar-consulta:usuario:{request.user.pk}"
+    )
+    try:
+        intentos = _incrementar_contador_rate_limit(
+            clave_intentos,
+            VENTANA_RATE_LIMIT_ELIMINAR_CONSULTA,
+        )
+    except RedisError:
+        logger.exception("El caché del límite de eliminación no responde.")
+        return _respuesta_cache_solicitudes_no_disponible()
+    if intentos > INTENTOS_MAXIMOS_ELIMINAR_CONSULTA:
+        return _respuesta_limite_eliminar_consulta(request)
+
+    consulta_id = _validar_pk_ruta(ConsultaJefeFarmacia, consulta_id)
+    consulta = get_object_or_404(ConsultaJefeFarmacia, pk=consulta_id)
+    password_confirmacion = request.POST.get("password_confirmacion", "")
+    if not request.user.check_password(password_confirmacion):
+        messages.error(
+            request,
+            "La contraseña no es correcta. No se eliminó la consulta.",
+        )
+        return redirect("farmacia:consultas_jefe")
+
+    nombre_imagen = consulta.foto_receta.name
+    almacen_imagen = consulta.foto_receta.storage
+    try:
+        with transaction.atomic():
+            consulta.delete()
+            if nombre_imagen:
+                transaction.on_commit(
+                    lambda: _eliminar_archivo_consulta(
+                        almacen_imagen,
+                        nombre_imagen,
+                    )
+                )
+    except ProtectedError:
+        messages.error(
+            request,
+            "No se puede eliminar la consulta porque tiene registros asociados.",
+        )
+        return redirect("farmacia:consultas_jefe")
+
+    messages.success(request, f"La consulta #{consulta_id} fue eliminada.")
+    return redirect("farmacia:consultas_jefe")
 
 
 @require_GET
@@ -1321,5 +1791,6 @@ def caja(request):
                 producto["subtotal"] is not None for producto in productos_carrito
             ),
             "pagos_recientes": pagos_recientes,
+            "url_gestion_inventario": _url_gestion_inventario(request.user),
         },
     )

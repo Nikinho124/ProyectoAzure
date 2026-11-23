@@ -34,15 +34,13 @@ def _environment_bool(name, default):
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
-DEBUG = _environment_bool("DJANGO_DEBUG", True)
+DEBUG = _environment_bool("DJANGO_DEBUG", False)
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY")
 if not SECRET_KEY:
-    if not DEBUG:
-        raise ImproperlyConfigured(
-            "Configura DJANGO_SECRET_KEY antes de iniciar en producción."
-        )
-    SECRET_KEY = "local-development-only-not-for-production"
-elif not DEBUG and (
+    raise ImproperlyConfigured(
+        "Configura DJANGO_SECRET_KEY en el entorno antes de iniciar Django."
+    )
+if not DEBUG and (
     len(SECRET_KEY) < 50
     or len(set(SECRET_KEY)) < 5
     or SECRET_KEY.startswith("django-insecure-")

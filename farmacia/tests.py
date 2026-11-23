@@ -20,6 +20,7 @@ from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError, transaction
 from django.db.backends.sqlite3.base import DatabaseWrapper
+from django.db.models.deletion import ProtectedError
 from django.db.utils import OperationalError
 from django.http import QueryDict
 from django.test import Client, RequestFactory, TestCase, override_settings
@@ -34,10 +35,12 @@ from farmacia.models import (
     GRUPO_FARMACEUTICO,
     GRUPO_JEFE_FARMACIA,
     AutorizacionExcepcional,
+    AuditoriaInventario,
     ConsultaJefeFarmacia,
     IngresoInventario,
     MAX_RECETA_UPLOAD_BYTES,
     MAX_RECETA_IMAGE_PIXELS,
+    Proveedor,
     DetalleVentaCaja,
     Medicamento,
     Merma,
@@ -60,6 +63,7 @@ class AccesoYFarmaciaTests(TestCase):
             email="jefe@example.com",
             password="Admin-password-123",
         )
+        self.proveedor = Proveedor.objects.create(nombre="Proveedor de prueba")
 
     def test_login_es_pagina_inicial_sin_registro_ni_catalogo_publico(self):
         respuesta = self.client.get(reverse("login"))
@@ -599,6 +603,7 @@ class AccesoYFarmaciaTests(TestCase):
             lote="LOTE-QF-001",
             cantidad=12,
             fecha_vencimiento=timezone.localdate() + timedelta(days=90),
+            proveedor=self.proveedor,
             registrado_por=self.admin,
         )
         self.client.force_login(quimico)
@@ -656,6 +661,7 @@ class AccesoYFarmaciaTests(TestCase):
             lote="LOTE-RECETA-002",
             cantidad=3,
             fecha_vencimiento=timezone.localdate() + timedelta(days=90),
+            proveedor=self.proveedor,
             registrado_por=self.admin,
         )
         self.client.force_login(quimico)
@@ -683,6 +689,7 @@ class AccesoYFarmaciaTests(TestCase):
             lote="LOTE-CAJA-001",
             cantidad=5,
             fecha_vencimiento=timezone.localdate() + timedelta(days=90),
+            proveedor=self.proveedor,
             registrado_por=self.admin,
         )
         self.client.force_login(quimico)
@@ -728,6 +735,7 @@ class AccesoYFarmaciaTests(TestCase):
             lote="LOTE-VENTA-PROXIMO",
             cantidad=2,
             fecha_vencimiento=timezone.localdate() + timedelta(days=30),
+            proveedor=self.proveedor,
             registrado_por=self.admin,
         )
         lote_posterior = IngresoInventario.objects.create(
@@ -735,6 +743,7 @@ class AccesoYFarmaciaTests(TestCase):
             lote="LOTE-VENTA-POSTERIOR",
             cantidad=5,
             fecha_vencimiento=timezone.localdate() + timedelta(days=60),
+            proveedor=self.proveedor,
             registrado_por=self.admin,
         )
         self.client.force_login(quimico)
@@ -829,6 +838,7 @@ class AccesoYFarmaciaTests(TestCase):
             lote="LOTE-VENTA-LIMITADO",
             cantidad=1,
             fecha_vencimiento=timezone.localdate() + timedelta(days=60),
+            proveedor=self.proveedor,
             registrado_por=self.admin,
         )
         self.client.force_login(quimico)
@@ -872,6 +882,7 @@ class AccesoYFarmaciaTests(TestCase):
             lote="LOTE-VENTA-RECETA",
             cantidad=3,
             fecha_vencimiento=timezone.localdate() + timedelta(days=60),
+            proveedor=self.proveedor,
             registrado_por=self.admin,
         )
         self.client.force_login(quimico)
@@ -1066,6 +1077,7 @@ class AccesoYFarmaciaTests(TestCase):
             lote="LOTE-FOLIO-DESTINO",
             cantidad=3,
             fecha_vencimiento=timezone.localdate() + timedelta(days=60),
+            proveedor=self.proveedor,
             registrado_por=self.admin,
         )
         receta = VentaRecetaRetenida.objects.create(
@@ -1109,6 +1121,7 @@ class AccesoYFarmaciaTests(TestCase):
             lote="LOTE-CANTIDAD-RECETA",
             cantidad=4,
             fecha_vencimiento=timezone.localdate() + timedelta(days=60),
+            proveedor=self.proveedor,
             registrado_por=self.admin,
         )
         receta = VentaRecetaRetenida.objects.create(
@@ -1161,6 +1174,7 @@ class AccesoYFarmaciaTests(TestCase):
             lote="LOTE-REVISOR-SIN-ROL",
             cantidad=2,
             fecha_vencimiento=timezone.localdate() + timedelta(days=60),
+            proveedor=self.proveedor,
             registrado_por=self.admin,
         )
         receta = VentaRecetaRetenida.objects.create(
@@ -1204,6 +1218,7 @@ class AccesoYFarmaciaTests(TestCase):
             lote="LOTE-RECETA-APROBADA",
             cantidad=5,
             fecha_vencimiento=timezone.localdate() + timedelta(days=60),
+            proveedor=self.proveedor,
             registrado_por=self.admin,
         )
         venta_receta = VentaRecetaRetenida.objects.create(
@@ -1324,6 +1339,7 @@ class AccesoYFarmaciaTests(TestCase):
             lote="LOTE-RECETA-UNICA-DETALLE",
             cantidad=5,
             fecha_vencimiento=timezone.localdate() + timedelta(days=60),
+            proveedor=self.proveedor,
             registrado_por=self.admin,
         )
         receta = VentaRecetaRetenida.objects.create(
@@ -1380,6 +1396,7 @@ class AccesoYFarmaciaTests(TestCase):
             lote="LOTE-RECETA-STOCK",
             cantidad=1,
             fecha_vencimiento=timezone.localdate() + timedelta(days=60),
+            proveedor=self.proveedor,
             registrado_por=self.admin,
         )
         receta = VentaRecetaRetenida.objects.create(
@@ -1435,6 +1452,7 @@ class AccesoYFarmaciaTests(TestCase):
             lote="LOTE-RECETA-CHECKOUT-STOCK",
             cantidad=2,
             fecha_vencimiento=timezone.localdate() + timedelta(days=60),
+            proveedor=self.proveedor,
             registrado_por=self.admin,
         )
         receta = VentaRecetaRetenida.objects.create(
@@ -1542,6 +1560,80 @@ class AccesoYFarmaciaTests(TestCase):
         self.assertFalse(quimico.is_staff)
         self.assertFalse(quimico.is_superuser)
         self.assertFalse(venta.autorizaciones_excepcionales.exists())
+
+    def test_receta_retenida_limita_pendientes_y_aplica_cooldown(self):
+        quimico = self.crear_quimico("auditor_limite_solicitudes")
+        medicamento = Medicamento.objects.create(
+            codigo="MED-RECETA-LIMITE-SOLICITUDES",
+            nombre="Medicamento para límite de solicitudes",
+            requiere_receta=True,
+        )
+        self.client.force_login(quimico)
+        datos = {
+            "cliente_rut": "11111111-1",
+            "medicamento": medicamento.pk,
+            "cantidad": "1",
+            "medico_prescriptor": "Dra. Ejemplo",
+            "foto_receta": self.crear_imagen_receta(),
+        }
+
+        respuesta = self.client.post(
+            reverse("farmacia:recetas_retenidas"),
+            datos,
+            follow=True,
+        )
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(
+            VentaRecetaRetenida.objects.filter(auditor_qf=quimico).count(),
+            1,
+        )
+        receta_inicial = VentaRecetaRetenida.objects.get(auditor_qf=quimico)
+        self.addCleanup(lambda: receta_inicial.foto_receta.delete(save=False))
+
+        respuesta = self.client.post(
+            reverse("farmacia:recetas_retenidas"),
+            {},
+            follow=True,
+        )
+        self.assertContains(
+            respuesta,
+            "Debes esperar 2 minutos antes de enviar otra solicitud.",
+        )
+        self.assertEqual(
+            VentaRecetaRetenida.objects.filter(auditor_qf=quimico).count(),
+            1,
+        )
+
+        cache.delete(f"farmacia:cooldown:receta-retenida:{quimico.pk}")
+        for _ in range(2):
+            receta_pendiente = VentaRecetaRetenida.objects.create(
+                cliente_rut="11111111-1",
+                medicamento=medicamento,
+                cantidad=1,
+                foto_receta=self.crear_imagen_receta(),
+                medico_prescriptor="Dra. Ejemplo",
+                auditor_qf=quimico,
+            )
+            self.addCleanup(
+                lambda receta=receta_pendiente: receta.foto_receta.delete(
+                    save=False
+                )
+            )
+
+        respuesta = self.client.post(
+            reverse("farmacia:recetas_retenidas"),
+            {},
+            follow=True,
+        )
+        self.assertContains(
+            respuesta,
+            "Has alcanzado el límite de 3 solicitudes pendientes. "
+            "Espera la respuesta del Jefe de Farmacia.",
+        )
+        self.assertEqual(
+            VentaRecetaRetenida.objects.filter(auditor_qf=quimico).count(),
+            3,
+        )
 
     def test_formulario_receta_rechaza_cantidades_fuera_de_rango(self):
         quimico = self.crear_quimico("auditor_cantidad_fuera_rango")
@@ -2112,6 +2204,71 @@ class AccesoYFarmaciaTests(TestCase):
         self.assertEqual(foto_jefe.status_code, 200)
         foto_jefe.close()
 
+    def test_consulta_jefe_limita_pendientes_y_aplica_cooldown(self):
+        quimico = self.crear_quimico("quimico_limite_solicitudes")
+        self.client.force_login(quimico)
+        datos = {
+            "asunto": "Consulta de prueba",
+            "pregunta": "Necesito confirmar una indicación.",
+            "foto_receta": self.crear_imagen_receta(),
+        }
+
+        respuesta = self.client.post(
+            reverse("farmacia:consultas_jefe"),
+            datos,
+            follow=True,
+        )
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(
+            ConsultaJefeFarmacia.objects.filter(solicitante=quimico).count(),
+            1,
+        )
+        consulta_inicial = ConsultaJefeFarmacia.objects.get(solicitante=quimico)
+        self.addCleanup(lambda: consulta_inicial.foto_receta.delete(save=False))
+
+        respuesta = self.client.post(
+            reverse("farmacia:consultas_jefe"),
+            {},
+            follow=True,
+        )
+        self.assertContains(
+            respuesta,
+            "Debes esperar 2 minutos antes de enviar otra solicitud.",
+        )
+        self.assertEqual(
+            ConsultaJefeFarmacia.objects.filter(solicitante=quimico).count(),
+            1,
+        )
+
+        cache.delete(f"farmacia:cooldown:consulta-jefe:{quimico.pk}")
+        for indice in range(2):
+            consulta_pendiente = ConsultaJefeFarmacia.objects.create(
+                solicitante=quimico,
+                asunto=f"Consulta pendiente {indice}",
+                pregunta="Consulta de prueba.",
+                foto_receta=self.crear_imagen_receta(),
+            )
+            self.addCleanup(
+                lambda consulta=consulta_pendiente: consulta.foto_receta.delete(
+                    save=False
+                )
+            )
+
+        respuesta = self.client.post(
+            reverse("farmacia:consultas_jefe"),
+            {},
+            follow=True,
+        )
+        self.assertContains(
+            respuesta,
+            "Has alcanzado el límite de 3 solicitudes pendientes. "
+            "Espera la respuesta del Jefe de Farmacia.",
+        )
+        self.assertEqual(
+            ConsultaJefeFarmacia.objects.filter(solicitante=quimico).count(),
+            3,
+        )
+
     def test_imagen_de_consulta_se_recodifica_sin_metadatos_exif(self):
         quimico = self.crear_quimico("quimico_imagen_exif")
         self.client.force_login(quimico)
@@ -2156,7 +2313,7 @@ class AccesoYFarmaciaTests(TestCase):
         )
         self.addCleanup(lambda: consulta.foto_receta.delete(save=False))
         jefe = User.objects.create_user(username="jefe_farmacia", is_active=True)
-        jefe.groups.add(Group.objects.get_or_create(name=GRUPO_JEFE_FARMACIA)[0])
+        jefe.groups.add(Group.objects.get_or_create(name="Jefe_QF")[0])
         self.client.force_login(jefe)
 
         respuesta = self.client.post(
@@ -2183,6 +2340,185 @@ class AccesoYFarmaciaTests(TestCase):
         self.assertContains(respuesta, "ya fue respondida")
         consulta.refresh_from_db()
         self.assertEqual(consulta.respuesta, "Dosis confirmada.")
+
+    def test_eliminar_consulta_requiere_password_y_conserva_registro_si_falla(self):
+        quimico = self.crear_quimico("quimico_consulta_password_incorrecto")
+        consulta = ConsultaJefeFarmacia.objects.create(
+            solicitante=quimico,
+            asunto="Consulta protegida",
+            pregunta="Consulta que no debe eliminarse con clave incorrecta.",
+            foto_receta=self.crear_imagen_receta(),
+        )
+        self.addCleanup(lambda: consulta.foto_receta.delete(save=False))
+        jefe = self.crear_jefe("jefe_consulta_password_incorrecto")
+        jefe.set_password("Jefe-password-123")
+        jefe.save(update_fields=("password",))
+        self.client.force_login(jefe)
+
+        respuesta = self.client.post(
+            reverse("farmacia:eliminar_consulta_jefe", args=(consulta.pk,)),
+            {"password_confirmacion": "Clave-incorrecta"},
+            follow=True,
+        )
+
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertContains(respuesta, "La contraseña no es correcta.")
+        self.assertTrue(ConsultaJefeFarmacia.objects.filter(pk=consulta.pk).exists())
+
+    def test_eliminar_consulta_valida_rol_password_y_limpia_foto(self):
+        quimico = self.crear_quimico("quimico_consulta_eliminar")
+        consulta = ConsultaJefeFarmacia.objects.create(
+            solicitante=quimico,
+            asunto="Consulta eliminable",
+            pregunta="Consulta creada para verificar la eliminación.",
+            foto_receta=self.crear_imagen_receta(),
+        )
+        nombre_imagen = consulta.foto_receta.name
+        almacen_imagen = consulta.foto_receta.storage
+        self.addCleanup(lambda: almacen_imagen.delete(nombre_imagen))
+        self.assertTrue(almacen_imagen.exists(nombre_imagen))
+        jefe = self.crear_jefe("jefe_consulta_eliminar")
+        jefe.set_password("Jefe-password-123")
+        jefe.save(update_fields=("password",))
+        self.client.force_login(jefe)
+
+        with self.captureOnCommitCallbacks(execute=True):
+            respuesta = self.client.post(
+                reverse("farmacia:eliminar_consulta_jefe", args=(consulta.pk,)),
+                {"password_confirmacion": "Jefe-password-123"},
+            )
+
+        self.assertEqual(respuesta.status_code, 302)
+        self.assertFalse(ConsultaJefeFarmacia.objects.filter(pk=consulta.pk).exists())
+        self.assertFalse(almacen_imagen.exists(nombre_imagen))
+
+    def test_eliminar_consulta_rechaza_metodos_y_roles_no_autorizados(self):
+        quimico = self.crear_quimico("quimico_sin_permiso_eliminar")
+        cliente = User.objects.create_user(
+            username="cliente_sin_permiso_eliminar",
+            password="Cliente-password-123",
+            is_active=True,
+        )
+        consulta = ConsultaJefeFarmacia.objects.create(
+            solicitante=quimico,
+            asunto="Consulta no autorizada",
+            pregunta="Un químico no puede eliminar esta consulta.",
+            foto_receta=self.crear_imagen_receta(),
+        )
+        self.addCleanup(lambda: consulta.foto_receta.delete(save=False))
+        jefe = self.crear_jefe("jefe_metodo_eliminar")
+        jefe.set_password("Jefe-password-123")
+        jefe.save(update_fields=("password",))
+
+        for usuario in (quimico, cliente):
+            self.client.force_login(usuario)
+            for metodo in ("get", "post"):
+                with self.subTest(usuario=usuario.username, metodo=metodo):
+                    respuesta = getattr(self.client, metodo)(
+                        reverse(
+                            "farmacia:eliminar_consulta_jefe",
+                            args=(consulta.pk,),
+                        ),
+                        {"password_confirmacion": "Jefe-password-123"}
+                        if metodo == "post"
+                        else None,
+                    )
+                    self.assertEqual(respuesta.status_code, 403)
+
+        self.client.force_login(jefe)
+        respuesta_jefe_get = self.client.get(
+            reverse("farmacia:eliminar_consulta_jefe", args=(consulta.pk,))
+        )
+
+        self.assertEqual(respuesta_jefe_get.status_code, 405)
+        self.assertTrue(ConsultaJefeFarmacia.objects.filter(pk=consulta.pk).exists())
+
+    def test_eliminar_consulta_limita_a_cinco_intentos_por_minuto(self):
+        quimico = self.crear_quimico("quimico_consulta_rate_limit")
+        consulta = ConsultaJefeFarmacia.objects.create(
+            solicitante=quimico,
+            asunto="Consulta con límite",
+            pregunta="Consulta para probar límite de clave.",
+            foto_receta=self.crear_imagen_receta(),
+        )
+        self.addCleanup(lambda: consulta.foto_receta.delete(save=False))
+        jefe = self.crear_jefe("jefe_consulta_rate_limit")
+        jefe.set_password("Jefe-password-123")
+        jefe.save(update_fields=("password",))
+        self.client.force_login(jefe)
+        url = reverse("farmacia:eliminar_consulta_jefe", args=(consulta.pk,))
+
+        for intento in range(5):
+            with self.subTest(intento=intento + 1):
+                respuesta = self.client.post(
+                    url,
+                    {"password_confirmacion": "Clave-incorrecta"},
+                )
+                self.assertEqual(respuesta.status_code, 302)
+
+        respuesta = self.client.post(
+            url,
+            {"password_confirmacion": "Clave-incorrecta"},
+            HTTP_ACCEPT="application/json",
+        )
+
+        self.assertEqual(respuesta.status_code, 429)
+        self.assertEqual(respuesta["Retry-After"], "60")
+        self.assertEqual(respuesta.json()["error"], "rate_limited")
+        self.assertTrue(ConsultaJefeFarmacia.objects.filter(pk=consulta.pk).exists())
+
+    def test_eliminar_consulta_maneja_protected_error_sin_traza(self):
+        quimico = self.crear_quimico("quimico_consulta_protected_error")
+        consulta = ConsultaJefeFarmacia.objects.create(
+            solicitante=quimico,
+            asunto="Consulta protegida",
+            pregunta="La eliminación simula una FK protegida.",
+            foto_receta=self.crear_imagen_receta(),
+        )
+        self.addCleanup(lambda: consulta.foto_receta.delete(save=False))
+        jefe = self.crear_jefe("jefe_consulta_protected_error")
+        jefe.set_password("Jefe-password-123")
+        jefe.save(update_fields=("password",))
+        self.client.force_login(jefe)
+
+        with patch(
+            "farmacia.views.ConsultaJefeFarmacia.delete",
+            side_effect=ProtectedError("protected", []),
+        ):
+            respuesta = self.client.post(
+                reverse("farmacia:eliminar_consulta_jefe", args=(consulta.pk,)),
+                {"password_confirmacion": "Jefe-password-123"},
+                follow=True,
+            )
+
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertContains(
+            respuesta,
+            "No se puede eliminar la consulta porque tiene registros asociados.",
+        )
+        self.assertNotContains(respuesta, "Traceback")
+        self.assertTrue(ConsultaJefeFarmacia.objects.filter(pk=consulta.pk).exists())
+
+    def test_plantilla_consulta_escapa_texto_y_incluye_csrf_en_eliminacion(self):
+        quimico = self.crear_quimico("quimico_consulta_xss")
+        consulta = ConsultaJefeFarmacia.objects.create(
+            solicitante=quimico,
+            asunto="<script>alert(1)</script>",
+            pregunta="<img src=x onerror=alert(1)>",
+            foto_receta=self.crear_imagen_receta(),
+        )
+        self.addCleanup(lambda: consulta.foto_receta.delete(save=False))
+        jefe = self.crear_jefe("jefe_consulta_xss")
+        self.client.force_login(jefe)
+
+        respuesta = self.client.get(reverse("farmacia:consultas_jefe"))
+
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertContains(respuesta, "name=\"csrfmiddlewaretoken\"")
+        self.assertContains(respuesta, "&lt;script&gt;alert(1)&lt;/script&gt;")
+        self.assertContains(respuesta, "&lt;img src=x onerror=alert(1)&gt;")
+        self.assertNotContains(respuesta, "<script>alert(1)</script>")
+        self.assertNotContains(respuesta, "<img src=x onerror=alert(1)>")
 
     def test_formulario_consulta_rechaza_archivo_que_no_es_imagen(self):
         quimico = self.crear_quimico()
@@ -2271,6 +2607,7 @@ class AccesoYFarmaciaTests(TestCase):
             lote="LOTE-CAJA-002",
             cantidad=1,
             fecha_vencimiento=timezone.localdate() + timedelta(days=90),
+            proveedor=self.proveedor,
             registrado_por=self.admin,
         )
         self.client.force_login(quimico)
@@ -2411,6 +2748,162 @@ class AccesoYFarmaciaTests(TestCase):
         self.assertContains(respuesta, "Eliminar medicamento")
         self.assertContains(respuesta, "Permisos incluidos en este grupo")
 
+    def test_navbar_compartida_muestra_gestion_de_inventario_a_superusuario(self):
+        self.client.force_login(self.admin)
+        url_inventario = reverse("admin:farmacia_ingresoinventario_changelist")
+        rutas = (
+            "farmacia:inicio",
+            "farmacia:caja",
+            "farmacia:recetas_retenidas",
+            "farmacia:consultas_jefe",
+        )
+
+        for ruta in rutas:
+            with self.subTest(ruta=ruta):
+                respuesta = self.client.get(reverse(ruta))
+                self.assertEqual(respuesta.status_code, 200)
+                self.assertContains(respuesta, url_inventario)
+                self.assertContains(respuesta, "Punto de Venta")
+                self.assertContains(respuesta, "Gesti&oacute;n de Inventario")
+
+    def test_navbar_no_muestra_gestion_de_inventario_sin_permiso(self):
+        quimico = self.crear_quimico("quimico_sin_permiso_inventario")
+        self.client.force_login(quimico)
+
+        respuesta = self.client.get(reverse("farmacia:inicio"))
+
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertNotContains(respuesta, "Gestión de Inventario")
+
+    def test_jefe_puede_ingresar_al_admin_y_gestionar_proveedores(self):
+        jefe = User.objects.create_user(
+            username="jefe_gestion_proveedores",
+            is_active=True,
+        )
+        jefe.groups.add(Group.objects.get_or_create(name="Jefe_QF")[0])
+        jefe.set_password("Jefe-password-123")
+        jefe.save(update_fields=("password",))
+
+        respuesta_login = self.client.post(
+            reverse("admin:login"),
+            {
+                "username": jefe.username,
+                "password": "Jefe-password-123",
+                "next": reverse("admin:index"),
+            },
+        )
+
+        self.assertRedirects(
+            respuesta_login,
+            reverse("admin:index"),
+            fetch_redirect_response=False,
+        )
+        respuesta = self.client.post(
+            reverse("admin:farmacia_proveedor_add"),
+            {
+                "nombre": "Distribuidora del Sur",
+                "rut": "12345678-5",
+                "activo": "on",
+                "_save": "Guardar",
+            },
+        )
+
+        self.assertEqual(respuesta.status_code, 302)
+        proveedor = Proveedor.objects.get(nombre="Distribuidora del Sur")
+        self.assertEqual(proveedor.rut, "12345678-5")
+
+        respuesta_edicion = self.client.post(
+            reverse("admin:farmacia_proveedor_change", args=(proveedor.pk,)),
+            {
+                "nombre": "Distribuidora del Sur Actualizada",
+                "rut": "12345678-5",
+                "activo": "on",
+                "_save": "Guardar",
+            },
+        )
+
+        self.assertEqual(respuesta_edicion.status_code, 302)
+        proveedor.refresh_from_db()
+        self.assertEqual(proveedor.nombre, "Distribuidora del Sur Actualizada")
+
+    def test_personal_staff_fuera_del_rol_jefe_no_puede_agregar_proveedores(self):
+        usuario_staff = User.objects.create_user(
+            username="staff_sin_rol_proveedor",
+            password="Staff-password-123",
+            is_active=True,
+            is_staff=True,
+        )
+        self.client.force_login(usuario_staff)
+
+        respuesta = self.client.post(
+            reverse("admin:farmacia_proveedor_add"),
+            {
+                "nombre": "Proveedor no autorizado",
+                "rut": "",
+                "activo": "on",
+                "_save": "Guardar",
+            },
+        )
+
+        self.assertEqual(respuesta.status_code, 403)
+        self.assertFalse(
+            Proveedor.objects.filter(nombre="Proveedor no autorizado").exists()
+        )
+
+        respuesta_edicion = self.client.post(
+            reverse("admin:farmacia_proveedor_change", args=(self.proveedor.pk,)),
+            {
+                "nombre": "Proveedor editado sin permiso",
+                "rut": "",
+                "activo": "on",
+                "_save": "Guardar",
+            },
+        )
+
+        self.assertEqual(respuesta_edicion.status_code, 403)
+        self.proveedor.refresh_from_db()
+        self.assertEqual(self.proveedor.nombre, "Proveedor de prueba")
+
+    def test_admin_proveedor_muestra_error_controlado_ante_protected_error(self):
+        self.client.force_login(self.admin)
+
+        with patch(
+            "farmacia.admin.ProveedorAdmin.save_model",
+            side_effect=ProtectedError("protected", []),
+        ):
+            respuesta = self.client.post(
+                reverse("admin:farmacia_proveedor_add"),
+                {
+                    "nombre": "Proveedor con error simulado",
+                    "rut": "",
+                    "activo": "on",
+                    "_save": "Guardar",
+                },
+                follow=True,
+            )
+
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertContains(
+            respuesta,
+            "No se pudo guardar el proveedor por una restricción de integridad.",
+        )
+        self.assertNotContains(respuesta, "Traceback")
+        self.assertFalse(
+            Proveedor.objects.filter(nombre="Proveedor con error simulado").exists()
+        )
+
+    def test_admin_escapa_nombre_de_proveedor_antes_de_renderizarlo(self):
+        Proveedor.objects.create(nombre="<script>alert(1)</script>")
+        self.client.force_login(self.admin)
+
+        respuesta = self.client.get(
+            reverse("admin:farmacia_proveedor_changelist")
+        )
+
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertContains(respuesta, "&lt;script&gt;alert(1)&lt;/script&gt;")
+        self.assertNotContains(respuesta, "<script>alert(1)</script>")
+
     def test_administrador_puede_registrar_ingreso_desde_el_panel(self):
         medicamento = Medicamento.objects.create(
             codigo="MED-ADMIN-001",
@@ -2427,7 +2920,7 @@ class AccesoYFarmaciaTests(TestCase):
                 "fecha_vencimiento": (
                     timezone.localdate() + timedelta(days=180)
                 ).isoformat(),
-                "proveedor": "Proveedor de prueba",
+                "proveedor": self.proveedor.pk,
                 "_save": "Guardar",
             },
         )
@@ -2446,6 +2939,7 @@ class AccesoYFarmaciaTests(TestCase):
             lote="LOTE-ADMIN-02",
             cantidad=10,
             fecha_vencimiento=timezone.localdate() + timedelta(days=180),
+            proveedor=self.proveedor,
             registrado_por=self.admin,
         )
         self.client.force_login(self.admin)
@@ -2477,6 +2971,7 @@ class AccesoYFarmaciaTests(TestCase):
             lote="LOTE-ADMIN-BLOQUEO",
             cantidad=10,
             fecha_vencimiento=timezone.localdate() + timedelta(days=180),
+            proveedor=self.proveedor,
             registrado_por=self.admin,
         )
         self.client.force_login(self.admin)
@@ -2515,6 +3010,7 @@ class AccesoYFarmaciaTests(TestCase):
             lote="LOTE-MERMA-OBS",
             cantidad=5,
             fecha_vencimiento=timezone.localdate() + timedelta(days=180),
+            proveedor=self.proveedor,
             registrado_por=self.admin,
         )
         self.client.force_login(self.admin)
@@ -2638,7 +3134,7 @@ class AccesoYFarmaciaTests(TestCase):
             lote="LOTE-001",
             cantidad=10,
             fecha_vencimiento=timezone.localdate() + timedelta(days=180),
-            proveedor="Proveedor de prueba",
+            proveedor=self.proveedor,
             registrado_por=self.admin,
         )
         Merma.objects.create(
@@ -2673,6 +3169,7 @@ class AccesoYFarmaciaTests(TestCase):
             lote="LOTE-INGRESO-VENCIDO",
             cantidad=1,
             fecha_vencimiento=timezone.localdate() - timedelta(days=1),
+            proveedor=self.proveedor,
             registrado_por=self.admin,
         )
 
@@ -2696,6 +3193,7 @@ class AccesoYFarmaciaTests(TestCase):
                 lote="LOTE-CANTIDAD-GIGANTE",
                 cantidad=cantidad_gigante,
                 fecha_vencimiento=timezone.localdate() + timedelta(days=60),
+                proveedor=self.proveedor,
                 registrado_por=self.admin,
             )
         self.assertFalse(
@@ -2707,6 +3205,7 @@ class AccesoYFarmaciaTests(TestCase):
             lote="LOTE-MERMA-CANTIDAD-GIGANTE",
             cantidad=5,
             fecha_vencimiento=timezone.localdate() + timedelta(days=60),
+            proveedor=self.proveedor,
             registrado_por=self.admin,
         )
         with self.assertRaises(ValidationError):
@@ -2751,6 +3250,7 @@ class AccesoYFarmaciaTests(TestCase):
             lote="LOTE-VENCIDO-01",
             cantidad=10,
             fecha_vencimiento=timezone.localdate() + timedelta(days=1),
+            proveedor=self.proveedor,
             registrado_por=self.admin,
         )
         IngresoInventario.objects.filter(pk=ingreso_vencido.pk).update(
@@ -2761,6 +3261,7 @@ class AccesoYFarmaciaTests(TestCase):
             lote="LOTE-VIGENTE-01",
             cantidad=3,
             fecha_vencimiento=timezone.localdate() + timedelta(days=30),
+            proveedor=self.proveedor,
             registrado_por=self.admin,
         )
         self.client.force_login(self.admin)
@@ -2784,6 +3285,7 @@ class AccesoYFarmaciaTests(TestCase):
             lote="LOTE-VENCIDO-02",
             cantidad=10,
             fecha_vencimiento=timezone.localdate() + timedelta(days=1),
+            proveedor=self.proveedor,
             registrado_por=self.admin,
         )
         IngresoInventario.objects.filter(pk=ingreso_vencido.pk).update(
@@ -2794,3 +3296,408 @@ class AccesoYFarmaciaTests(TestCase):
         inicio = self.client.get(reverse("admin:index"))
 
         self.assertEqual(inicio.context["resumen_farmacia"]["stock_bajo"], 1)
+
+    def test_ajuste_lote_actualiza_stock_por_delta_y_registra_auditoria(self):
+        jefe = self.crear_jefe("jefe_ajuste_lote")
+        jefe.set_password("Jefe-password-123")
+        jefe.save(update_fields=("password",))
+        medicamento = Medicamento.objects.create(
+            codigo="MED-AJUSTE-LOTE",
+            nombre="Medicamento para ajuste de lote",
+        )
+        vencimiento_inicial = timezone.localdate() + timedelta(days=90)
+        ingreso = IngresoInventario.objects.create(
+            medicamento=medicamento,
+            lote="LOTE-AJUSTE-01",
+            cantidad=10,
+            fecha_vencimiento=vencimiento_inicial,
+            proveedor=self.proveedor,
+            registrado_por=self.admin,
+        )
+        IngresoInventario.objects.filter(pk=ingreso.pk).update(
+            stock_disponible=8
+        )
+        self.client.force_login(jefe)
+        datos_ajuste = {
+            "cantidad": "8",
+            "fecha_vencimiento": (
+                timezone.localdate() + timedelta(days=120)
+            ).isoformat(),
+            "motivo": "Se corrige el conteo del ingreso.",
+            "password_confirmacion": "Contraseña-incorrecta",
+        }
+
+        respuesta = self.client.post(
+            reverse("farmacia:ajustar_stock_lote", args=(ingreso.pk,)),
+            datos_ajuste,
+        )
+
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertContains(
+            respuesta,
+            "Contraseña de confirmación incorrecta.",
+            status_code=400,
+        )
+        ingreso.refresh_from_db()
+        self.assertEqual(ingreso.cantidad, 10)
+        self.assertEqual(ingreso.stock_disponible, 8)
+        self.assertFalse(AuditoriaInventario.objects.exists())
+
+        respuesta = self.client.post(
+            reverse("farmacia:ajustar_stock_lote", args=(ingreso.pk,)),
+            {
+                "cantidad": "8",
+                "fecha_vencimiento": datos_ajuste["fecha_vencimiento"],
+                "motivo": "Se corrige el conteo del ingreso.",
+                "password_confirmacion": "Jefe-password-123",
+            },
+        )
+
+        self.assertRedirects(
+            respuesta,
+            reverse("admin:farmacia_ingresoinventario_changelist"),
+            fetch_redirect_response=False,
+        )
+        ingreso.refresh_from_db()
+        auditoria = AuditoriaInventario.objects.get()
+        self.assertEqual(ingreso.cantidad, 8)
+        self.assertEqual(ingreso.stock_disponible, 6)
+        self.assertEqual(
+            auditoria.tipo_ajuste,
+            AuditoriaInventario.TipoAjuste.REDUCCION_STOCK,
+        )
+        self.assertEqual(auditoria.cantidad_anterior, 8)
+        self.assertEqual(auditoria.cantidad_nueva, 6)
+        self.assertIn("conteo del ingreso", auditoria.motivo)
+        self.assertIn("Cantidad recibida corregida de 10 a 8", auditoria.motivo)
+
+        fecha_corregida = timezone.localdate() + timedelta(days=150)
+        respuesta = self.client.post(
+            reverse("farmacia:ajustar_stock_lote", args=(ingreso.pk,)),
+            {
+                "cantidad": "8",
+                "fecha_vencimiento": fecha_corregida.isoformat(),
+                "motivo": "Se corrige la fecha según el envase.",
+                "password_confirmacion": "Jefe-password-123",
+            },
+        )
+
+        self.assertEqual(respuesta.status_code, 302)
+        ingreso.refresh_from_db()
+        self.assertEqual(ingreso.stock_disponible, 6)
+        self.assertEqual(ingreso.fecha_vencimiento, fecha_corregida)
+        self.assertEqual(AuditoriaInventario.objects.count(), 2)
+        self.assertEqual(
+            AuditoriaInventario.objects.order_by("-pk").first().tipo_ajuste,
+            AuditoriaInventario.TipoAjuste.CORRECCION_INGRESO,
+        )
+
+        respuesta = self.client.post(
+            reverse("farmacia:ajustar_stock_lote", args=(ingreso.pk,)),
+            {
+                "cantidad": "2",
+                "fecha_vencimiento": fecha_corregida.isoformat(),
+                "motivo": "Se corrige el conteo a dos unidades recibidas.",
+                "password_confirmacion": "Jefe-password-123",
+            },
+        )
+
+        self.assertEqual(respuesta.status_code, 302)
+        ingreso.refresh_from_db()
+        self.assertEqual(ingreso.stock_disponible, 0)
+        self.assertEqual(AuditoriaInventario.objects.count(), 3)
+
+    def test_ajuste_lote_rechaza_roles_no_autorizados_y_stock_negativo(self):
+        quimico = self.crear_quimico("quimico_sin_ajuste")
+        medicamento = Medicamento.objects.create(
+            codigo="MED-AJUSTE-DENEGADO",
+            nombre="Medicamento para rechazar ajuste",
+        )
+        ingreso = IngresoInventario.objects.create(
+            medicamento=medicamento,
+            lote="LOTE-AJUSTE-DENEGADO",
+            cantidad=10,
+            fecha_vencimiento=timezone.localdate() + timedelta(days=90),
+            proveedor=self.proveedor,
+            registrado_por=self.admin,
+        )
+        self.client.force_login(quimico)
+
+        for metodo in ("get", "post"):
+            respuesta = getattr(self.client, metodo)(
+                reverse("farmacia:ajustar_stock_lote", args=(ingreso.pk,)),
+                {
+                    "cantidad": "1",
+                    "fecha_vencimiento": timezone.localdate().isoformat(),
+                    "motivo": "Intento sin permisos.",
+                    "password_confirmacion": "Jefe-password-123",
+                },
+            )
+            self.assertEqual(respuesta.status_code, 403)
+
+        jefe = self.crear_jefe("jefe_ajuste_negativo")
+        jefe.set_password("Jefe-password-123")
+        jefe.save(update_fields=("password",))
+        IngresoInventario.objects.filter(pk=ingreso.pk).update(
+            stock_disponible=4
+        )
+        self.client.force_login(jefe)
+        respuesta = self.client.post(
+            reverse("farmacia:ajustar_stock_lote", args=(ingreso.pk,)),
+            {
+                "cantidad": "5",
+                "fecha_vencimiento": (
+                    timezone.localdate() + timedelta(days=90)
+                ).isoformat(),
+                "motivo": "     ",
+                "password_confirmacion": "Jefe-password-123",
+            },
+        )
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertFalse(AuditoriaInventario.objects.exists())
+
+        respuesta = self.client.post(
+            reverse("farmacia:ajustar_stock_lote", args=(ingreso.pk,)),
+            {
+                "cantidad": "5",
+                "fecha_vencimiento": (
+                    timezone.localdate() + timedelta(days=90)
+                ).isoformat(),
+                "motivo": "El ajuste produciría stock negativo.",
+                "password_confirmacion": "Jefe-password-123",
+            },
+        )
+
+        self.assertEqual(respuesta.status_code, 400)
+        ingreso.refresh_from_db()
+        self.assertEqual(ingreso.cantidad, 10)
+        self.assertEqual(ingreso.stock_disponible, 4)
+        self.assertFalse(AuditoriaInventario.objects.exists())
+
+    def test_reversion_merma_reintegra_stock_sin_borrar_y_no_se_repite(self):
+        jefe = self.crear_jefe("jefe_revertir_merma")
+        jefe.set_password("Jefe-password-123")
+        jefe.save(update_fields=("password",))
+        medicamento = Medicamento.objects.create(
+            codigo="MED-REVERTIR-MERMA",
+            nombre="Medicamento para reversión",
+        )
+        ingreso = IngresoInventario.objects.create(
+            medicamento=medicamento,
+            lote="LOTE-REVERTIR-01",
+            cantidad=10,
+            fecha_vencimiento=timezone.localdate() + timedelta(days=90),
+            proveedor=self.proveedor,
+            registrado_por=self.admin,
+        )
+        merma = Merma.objects.create(
+            ingreso=ingreso,
+            cantidad=3,
+            motivo=Merma.Motivo.DANADO,
+            observacion="Caja dañada durante la recepción.",
+            registrado_por=self.admin,
+        )
+        self.client.force_login(jefe)
+
+        respuesta = self.client.post(
+            reverse("farmacia:revertir_merma", args=(merma.pk,)),
+            {
+                "motivo": "La merma se registró por error.",
+                "password_confirmacion": "Contraseña-incorrecta",
+            },
+        )
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertContains(
+            respuesta,
+            "Contraseña de confirmación incorrecta.",
+            status_code=400,
+        )
+        ingreso.refresh_from_db()
+        merma.refresh_from_db()
+        self.assertEqual(ingreso.stock_disponible, 7)
+        self.assertFalse(merma.revertida)
+        self.assertFalse(AuditoriaInventario.objects.exists())
+
+        respuesta = self.client.post(
+            reverse("farmacia:revertir_merma", args=(merma.pk,)),
+            {
+                "motivo": "La merma se registró por error.",
+                "password_confirmacion": "Jefe-password-123",
+            },
+        )
+
+        self.assertRedirects(
+            respuesta,
+            reverse("admin:farmacia_merma_changelist"),
+            fetch_redirect_response=False,
+        )
+        ingreso.refresh_from_db()
+        merma.refresh_from_db()
+        auditoria = AuditoriaInventario.objects.get()
+        self.assertEqual(ingreso.stock_disponible, 10)
+        self.assertTrue(merma.revertida)
+        self.assertEqual(merma.ingreso_id, ingreso.pk)
+        self.assertEqual(ingreso.mermas_totales, 0)
+        self.assertEqual(auditoria.merma_id, merma.pk)
+        self.assertEqual(
+            auditoria.tipo_ajuste,
+            AuditoriaInventario.TipoAjuste.REVERSION_MERMA,
+        )
+        self.assertEqual(auditoria.cantidad_anterior, 7)
+        self.assertEqual(auditoria.cantidad_nueva, 10)
+
+        respuesta = self.client.post(
+            reverse("farmacia:revertir_merma", args=(merma.pk,)),
+            {
+                "motivo": "Segundo intento de reversión.",
+                "password_confirmacion": "Jefe-password-123",
+            },
+        )
+
+        self.assertEqual(respuesta.status_code, 400)
+        ingreso.refresh_from_db()
+        self.assertEqual(ingreso.stock_disponible, 10)
+        self.assertEqual(AuditoriaInventario.objects.count(), 1)
+
+    def test_ajustes_inventario_limita_a_cinco_intentos_por_minuto(self):
+        jefe = self.crear_jefe("jefe_rate_limit_inventario")
+        jefe.set_password("Jefe-password-123")
+        jefe.save(update_fields=("password",))
+        medicamento = Medicamento.objects.create(
+            codigo="MED-RATE-LIMIT-AJUSTE",
+            nombre="Medicamento para límite de ajustes",
+        )
+        ingreso = IngresoInventario.objects.create(
+            medicamento=medicamento,
+            lote="LOTE-RATE-LIMIT-AJUSTE",
+            cantidad=5,
+            fecha_vencimiento=timezone.localdate() + timedelta(days=90),
+            proveedor=self.proveedor,
+            registrado_por=self.admin,
+        )
+        self.client.force_login(jefe)
+        url = reverse("farmacia:ajustar_stock_lote", args=(ingreso.pk,))
+        datos = {
+            "cantidad": "4",
+            "fecha_vencimiento": (
+                timezone.localdate() + timedelta(days=90)
+            ).isoformat(),
+            "motivo": "Intento de ajuste con contraseña incorrecta.",
+            "password_confirmacion": "Contraseña-incorrecta",
+        }
+
+        for intento in range(1, 6):
+            with self.subTest(intento=intento):
+                respuesta = self.client.post(url, datos)
+                self.assertEqual(respuesta.status_code, 400)
+
+        respuesta = self.client.post(
+            url,
+            datos,
+            HTTP_ACCEPT="application/json",
+        )
+
+        self.assertEqual(respuesta.status_code, 429)
+        self.assertEqual(respuesta["Retry-After"], "60")
+        ingreso.refresh_from_db()
+        self.assertEqual(ingreso.cantidad, 5)
+        self.assertEqual(ingreso.stock_disponible, 5)
+        self.assertFalse(AuditoriaInventario.objects.exists())
+
+    def test_admin_muestra_dialogos_csrf_y_auditoria_solo_lectura(self):
+        medicamento = Medicamento.objects.create(
+            codigo="MED-ADMIN-AJUSTE",
+            nombre="Medicamento visible en administración",
+        )
+        ingreso = IngresoInventario.objects.create(
+            medicamento=medicamento,
+            lote="LOTE-ADMIN-AJUSTE",
+            cantidad=5,
+            fecha_vencimiento=timezone.localdate() + timedelta(days=90),
+            proveedor=self.proveedor,
+            registrado_por=self.admin,
+        )
+        Merma.objects.create(
+            ingreso=ingreso,
+            cantidad=1,
+            motivo=Merma.Motivo.DANADO,
+            observacion="Envase con daño visible.",
+            registrado_por=self.admin,
+        )
+        AuditoriaInventario.objects.create(
+            usuario=self.admin,
+            lote=ingreso,
+            tipo_ajuste=AuditoriaInventario.TipoAjuste.CORRECCION_INGRESO,
+            cantidad_anterior=4,
+            cantidad_nueva=5,
+            motivo="Corrección de prueba.",
+        )
+        self.client.force_login(self.admin)
+
+        inventario = self.client.get(
+            reverse("admin:farmacia_ingresoinventario_changelist")
+        )
+        mermas = self.client.get(reverse("admin:farmacia_merma_changelist"))
+        auditoria = self.client.get(
+            reverse("admin:farmacia_auditoriainventario_changelist")
+        )
+
+        self.assertEqual(inventario.status_code, 200)
+        self.assertContains(inventario, "Corregir lote / stock")
+        self.assertContains(inventario, "ajustar-lote-dialog")
+        self.assertContains(inventario, 'name="csrfmiddlewaretoken"')
+        self.assertContains(inventario, 'name="password_confirmacion"')
+        self.assertEqual(mermas.status_code, 200)
+        self.assertContains(mermas, "Anular / corregir merma")
+        self.assertContains(mermas, "revertir-merma-dialog")
+        self.assertContains(mermas, 'name="csrfmiddlewaretoken"')
+        self.assertContains(mermas, 'name="password_confirmacion"')
+        self.assertEqual(auditoria.status_code, 200)
+        self.assertContains(auditoria, "Corrección de ingreso")
+        self.assertNotContains(auditoria, "Add auditoría de inventario")
+
+    def test_jefe_farmacia_ve_acciones_de_ajuste_y_reversion_en_admin(self):
+        jefe = self.crear_jefe("jefe_botones_inventario")
+        medicamento = Medicamento.objects.create(
+            codigo="MED-BOTONES-JEFE",
+            nombre="Medicamento para botones del jefe",
+        )
+        ingreso = IngresoInventario.objects.create(
+            medicamento=medicamento,
+            lote="LOTE-BOTONES-JEFE",
+            cantidad=5,
+            fecha_vencimiento=timezone.localdate() + timedelta(days=90),
+            proveedor=self.proveedor,
+            registrado_por=self.admin,
+        )
+        Merma.objects.create(
+            ingreso=ingreso,
+            cantidad=1,
+            motivo=Merma.Motivo.DANADO,
+            observacion="Caja dañada.",
+            registrado_por=self.admin,
+        )
+        self.client.force_login(jefe)
+
+        inventario = self.client.get(
+            reverse("admin:farmacia_ingresoinventario_changelist")
+        )
+        mermas = self.client.get(reverse("admin:farmacia_merma_changelist"))
+
+        self.assertEqual(inventario.status_code, 200)
+        self.assertContains(inventario, "Corregir lote / stock")
+        self.assertEqual(mermas.status_code, 200)
+        self.assertContains(mermas, "Anular / corregir merma")
+
+    def test_jefe_farmacia_ve_el_acceso_a_gestion_de_inventario(self):
+        jefe = self.crear_jefe("jefe_nav_inventario")
+        self.client.force_login(jefe)
+
+        respuesta = self.client.get(reverse("farmacia:inicio"))
+
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertContains(
+            respuesta,
+            reverse("admin:farmacia_ingresoinventario_changelist"),
+        )
+        self.assertContains(respuesta, "Gesti&oacute;n de Inventario")

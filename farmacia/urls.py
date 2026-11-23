@@ -2,11 +2,14 @@ from django.urls import path
 
 from farmacia.views import (
     caja,
+    ajustar_stock_lote,
     consultas_jefe_farmacia,
+    eliminar_consulta_jefe,
     foto_consulta_jefe_farmacia,
     foto_receta_retenida,
     inicio_farmacia,
     recetas_retenidas,
+    revertir_merma,
     resolver_excepcion_receta,
     resolver_receta_retenida,
 )
@@ -16,6 +19,16 @@ app_name = "farmacia"
 urlpatterns = [
     path("", inicio_farmacia, name="inicio"),
     path("caja/", caja, name="caja"),
+    path(
+        "inventario/lotes/<int:lote_id>/ajustar/",
+        ajustar_stock_lote,
+        name="ajustar_stock_lote",
+    ),
+    path(
+        "inventario/mermas/<int:merma_id>/revertir/",
+        revertir_merma,
+        name="revertir_merma",
+    ),
     path("recetas-retenidas/", recetas_retenidas, name="recetas_retenidas"),
     path(
         "recetas-retenidas/<int:venta_id>/resolver/",
@@ -33,6 +46,11 @@ urlpatterns = [
         name="resolver_excepcion_receta",
     ),
     path("consultas-jefe/", consultas_jefe_farmacia, name="consultas_jefe"),
+    path(
+        "consultas-jefe/<int:consulta_id>/eliminar/",
+        eliminar_consulta_jefe,
+        name="eliminar_consulta_jefe",
+    ),
     path(
         "consultas-jefe/<int:consulta_id>/receta/",
         foto_consulta_jefe_farmacia,

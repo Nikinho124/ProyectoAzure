@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#123f33">
     <title>{% block title %}Farmacia{% endblock %} | FarmaSistem</title>
-    <link rel="stylesheet" href="{% static 'farmacia/sitio.css' %}?v=3">
+    <link rel="stylesheet" href="{% static 'farmacia/sitio.css' %}?v=4">
     {% block extra_style %}{% endblock %}
 </head>
 <body class="personal">
@@ -19,8 +19,8 @@
             <a href="{% url 'farmacia:inicio' %}" {% if request.resolver_match.url_name == "inicio" %}aria-current="page"{% endif %}>
                 <span class="nav-indicador" aria-hidden="true"></span>Resumen
             </a>
-            <a href="{% url 'farmacia:caja' %}" {% if request.resolver_match.url_name == "caja" %}aria-current="page"{% endif %}>
-                <span class="nav-indicador" aria-hidden="true"></span>Caja
+            <a href="{% url 'farmacia:caja' %}" aria-label="Punto de Venta (Caja)" {% if request.resolver_match.url_name == "caja" %}aria-current="page"{% endif %}>
+                <span class="nav-indicador" aria-hidden="true"></span>Punto de Venta
             </a>
             <a href="{% url 'farmacia:recetas_retenidas' %}" {% if request.resolver_match.url_name == "recetas_retenidas" %}aria-current="page"{% endif %}>
                 <span class="nav-indicador" aria-hidden="true"></span>Recetas retenidas
@@ -28,6 +28,11 @@
             <a href="{% url 'farmacia:consultas_jefe' %}" {% if request.resolver_match.url_name == "consultas_jefe" %}aria-current="page"{% endif %}>
                 <span class="nav-indicador" aria-hidden="true"></span>Consultas al Jefe
             </a>
+            {% if url_gestion_inventario %}
+                <a href="{{ url_gestion_inventario }}" aria-label="Gestión de Inventario (Admin)" {% if request.resolver_match.url_name == "farmacia_ingresoinventario_changelist" or request.resolver_match.url_name == "farmacia_ingresoinventario_add" %}aria-current="page"{% endif %}>
+                    <span class="nav-indicador" aria-hidden="true"></span>Gesti&oacute;n de Inventario
+                </a>
+            {% endif %}
         </nav>
         <div class="nav-personal">
             <span class="avatar-usuario" aria-hidden="true">{{ request.user.get_username|first|upper }}</span>

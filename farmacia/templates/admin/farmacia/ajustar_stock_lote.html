@@ -1,0 +1,23 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+    <div class="module aligned">
+        <h2>Corregir lote y stock</h2>
+        <p>
+            <strong>{{ lote.medicamento }}</strong> · Lote {{ lote.lote }} ·
+            Stock actual: {{ lote.stock_disponible }}
+        </p>
+        <p>
+            La corrección conserva el historial de ventas y mermas. Si reduces
+            unidades, el nuevo stock no puede quedar negativo.
+        </p>
+        <form method="post">
+            {% csrf_token %}
+            {{ form.as_p }}
+            <div class="submit-row">
+                <button class="default" type="submit">Guardar corrección auditada</button>
+                <a class="button cancel-link" href="{{ changelist_url }}">Cancelar</a>
+            </div>
+        </form>
+    </div>
+{% endblock %}

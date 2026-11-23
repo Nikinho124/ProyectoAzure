@@ -1471,6 +1471,7 @@ textarea:focus-visible {
 
 @media (max-width: 1000px) {
     .barra {
+        flex-wrap: wrap;
         gap: 1rem;
         padding-right: 1.25rem;
         padding-left: 1.25rem;
@@ -1479,6 +1480,15 @@ textarea:focus-visible {
     .marca,
     .nav-personal {
         min-width: auto;
+    }
+
+    .marca {
+        flex: 1 1 auto;
+    }
+
+    .nav-enlaces {
+        flex: 1 1 100%;
+        justify-content: center;
     }
 
     .caja-layout {
