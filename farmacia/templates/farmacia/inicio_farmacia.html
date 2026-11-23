@@ -95,5 +95,16 @@
                 </div>
             {% endfor %}
         </div>
+        {% if pagina_medicamentos.has_other_pages %}
+            <nav aria-label="Páginas del catálogo">
+                {% if pagina_medicamentos.has_previous %}
+                    <a href="?page={{ pagina_medicamentos.previous_page_number }}">Anterior</a>
+                {% endif %}
+                <span>Página {{ pagina_medicamentos.number }} de {{ pagina_medicamentos.paginator.num_pages }}</span>
+                {% if pagina_medicamentos.has_next %}
+                    <a href="?page={{ pagina_medicamentos.next_page_number }}">Siguiente</a>
+                {% endif %}
+            </nav>
+        {% endif %}
     </section>
 {% endblock %}

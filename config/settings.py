@@ -88,6 +88,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'config.security_middleware.ContentSecurityPolicyMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -127,12 +128,22 @@ SESSION_COOKIE_SECURE = not DEBUG
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Lax"
 SESSION_EXPIRE_AT_BROWSER_CLOSE = True
+SESSION_COOKIE_AGE = 28800
 CSRF_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_HTTPONLY = True
 CSRF_COOKIE_SAMESITE = "Lax"
 X_FRAME_OPTIONS = "DENY"
 SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_REFERRER_POLICY = "same-origin"
+SECURE_CROSS_ORIGIN_OPENER_POLICY = "same-origin"
+FARMACIA_RATE_LIMIT_REQUESTS = 15
+FARMACIA_RATE_LIMIT_WINDOW_SECONDS = 60
 # Django 4.0+ removed SECURE_BROWSER_XSS_FILTER; it is not an active defense.
+RECETA_MAX_IMAGE_PIXELS = 5_000_000
+DATA_UPLOAD_MAX_MEMORY_SIZE = 2_621_440
+FILE_UPLOAD_MAX_MEMORY_SIZE = 2_621_440
+DATA_UPLOAD_MAX_NUMBER_FIELDS = 100
+DATA_UPLOAD_MAX_NUMBER_FILES = 10
 try:
     SECURE_HSTS_SECONDS = int(os.environ.get("DJANGO_HSTS_SECONDS", "0"))
 except ValueError as error:
@@ -157,6 +168,9 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': BASE_DIR / 'db.sqlite3',
+        'OPTIONS': {
+            'timeout': 20,
+        },
     }
 }
 

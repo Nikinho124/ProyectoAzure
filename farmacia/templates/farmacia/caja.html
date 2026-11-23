@@ -22,7 +22,7 @@
                     <p class="sobretitulo">PRODUCTOS</p>
                     <h2 id="titulo-catalogo-caja">Selecciona medicamentos</h2>
                 </div>
-                <span class="contador-productos">{{ medicamentos|length }} resultados</span>
+                <span class="contador-productos">{{ pagina_medicamentos.paginator.count }} resultados</span>
             </div>
             <form class="buscador-caja" method="get" role="search">
                 <label class="oculto-accesible" for="buscar-caja">Buscar por nombre o c&oacute;digo</label>
@@ -106,6 +106,17 @@
                     </div>
                 {% endfor %}
             </div>
+            {% if pagina_medicamentos.has_other_pages %}
+                <nav aria-label="Páginas de resultados">
+                    {% if pagina_medicamentos.has_previous %}
+                        <a href="?{% if busqueda %}q={{ busqueda|urlencode }}&{% endif %}page={{ pagina_medicamentos.previous_page_number }}">Anterior</a>
+                    {% endif %}
+                    <span>Página {{ pagina_medicamentos.number }} de {{ pagina_medicamentos.paginator.num_pages }}</span>
+                    {% if pagina_medicamentos.has_next %}
+                        <a href="?{% if busqueda %}q={{ busqueda|urlencode }}&{% endif %}page={{ pagina_medicamentos.next_page_number }}">Siguiente</a>
+                    {% endif %}
+                </nav>
+            {% endif %}
         </section>
 
         <aside class="panel carrito" aria-labelledby="titulo-carrito">
@@ -219,7 +230,7 @@
         </div>
     </section>
 
-    <script>
+    <script nonce="{{ request.csp_nonce }}">
         (() => {
             const feedback = document.getElementById("caja-feedback");
             const forms = document.querySelectorAll("form[data-json-response]");

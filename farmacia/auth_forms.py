@@ -5,17 +5,21 @@ from farmacia.models import GRUPO_FARMACEUTICO, GRUPO_JEFE_FARMACIA
 
 
 class EmployeeAuthenticationForm(AuthenticationForm):
+    error_messages = {
+        **AuthenticationForm.error_messages,
+        "invalid_login": "Usuario o contraseña incorrectos.",
+    }
+
     def confirm_login_allowed(self, user):
-        super().confirm_login_allowed(user)
-        if not (
+        if not user.is_active or not (
             user.is_superuser
             or user.groups.filter(
                 name__in=(GRUPO_FARMACEUTICO, GRUPO_JEFE_FARMACIA)
             ).exists()
         ):
             raise ValidationError(
-                "Esta plataforma es exclusiva para personal autorizado.",
-                code="not_employee",
+                self.error_messages["invalid_login"],
+                code="invalid_login",
             )
 
     def __init__(self, *args, **kwargs):

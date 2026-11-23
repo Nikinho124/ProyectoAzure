@@ -3,7 +3,7 @@
 {% block title %}Recetas retenidas{% endblock %}
 
 {% block extra_style %}
-    <style>
+    <style nonce="{{ request.csp_nonce }}">
         .recetas-cabecera, .recetas-panel, .receta-tarjeta {
             margin: 1.5rem auto;
             max-width: 1050px;
@@ -88,10 +88,6 @@
                     <h3>Receta #{{ venta.pk }} · {{ venta.medicamento|default:venta.medicamento_legado }}</h3>
                     <p class="receta-meta">Cliente: {{ venta.cliente_rut }} · Cantidad: {{ venta.cantidad }} · Enviada {{ venta.fecha_registro|date:"d/m/Y H:i" }}</p>
                     <a href="{% url 'farmacia:foto_receta_retenida' venta.pk %}" target="_blank" rel="noopener">Revisar imagen de la receta</a>
-                    <form method="post" action="{% url 'farmacia:resolver_receta_retenida' venta.pk %}" class="receta-formulario">
-                        {% csrf_token %}
-                        <button type="submit" name="decision" value="aprobar">Aprobar mi receta</button>
-                    </form>
                 </article>
             {% empty %}
                 <p>No tienes recetas pendientes.</p>
@@ -120,6 +116,17 @@
             {% empty %}
                 <p>No hay excepciones pendientes.</p>
             {% endfor %}
+            {% if excepciones_pendientes.has_other_pages %}
+                <nav aria-label="Páginas de excepciones pendientes">
+                    {% if excepciones_pendientes.has_previous %}
+                        <a href="?pagina_excepciones={{ excepciones_pendientes.previous_page_number }}">Anterior</a>
+                    {% endif %}
+                    <span>Página {{ excepciones_pendientes.number }} de {{ excepciones_pendientes.paginator.num_pages }}</span>
+                    {% if excepciones_pendientes.has_next %}
+                        <a href="?pagina_excepciones={{ excepciones_pendientes.next_page_number }}">Siguiente</a>
+                    {% endif %}
+                </nav>
+            {% endif %}
         </section>
 
         <section class="recetas-panel" aria-labelledby="recetas-pendientes">
@@ -149,6 +156,17 @@
             {% empty %}
                 <p>No hay recetas pendientes.</p>
             {% endfor %}
+            {% if pendientes.has_other_pages %}
+                <nav aria-label="Páginas de recetas pendientes">
+                    {% if pendientes.has_previous %}
+                        <a href="?pagina_pendientes={{ pendientes.previous_page_number }}">Anterior</a>
+                    {% endif %}
+                    <span>Página {{ pendientes.number }} de {{ pendientes.paginator.num_pages }}</span>
+                    {% if pendientes.has_next %}
+                        <a href="?pagina_pendientes={{ pendientes.next_page_number }}">Siguiente</a>
+                    {% endif %}
+                </nav>
+            {% endif %}
         </section>
     {% endif %}
 
@@ -167,5 +185,16 @@
         {% empty %}
             <p>No hay recetas en el historial.</p>
         {% endfor %}
+        {% if historial.has_other_pages %}
+            <nav aria-label="Páginas del historial de recetas">
+                {% if historial.has_previous %}
+                    <a href="?pagina_historial={{ historial.previous_page_number }}">Anterior</a>
+                {% endif %}
+                <span>Página {{ historial.number }} de {{ historial.paginator.num_pages }}</span>
+                {% if historial.has_next %}
+                    <a href="?pagina_historial={{ historial.next_page_number }}">Siguiente</a>
+                {% endif %}
+            </nav>
+        {% endif %}
     </section>
 {% endblock %}

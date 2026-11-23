@@ -3,7 +3,7 @@
 {% block title %}Consultas al Jefe de Farmacia{% endblock %}
 
 {% block extra_style %}
-    <style>
+    <style nonce="{{ request.csp_nonce }}">
         .consulta-cabecera {
             position: relative;
             overflow: hidden;

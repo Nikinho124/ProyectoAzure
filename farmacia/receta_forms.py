@@ -14,8 +14,11 @@ from farmacia.models import (
     MAX_UNIDADES_POR_RECETA,
     Medicamento,
     VentaRecetaRetenida,
+    normalizar_texto_seguro,
     validar_archivo_receta,
 )
+
+Image.MAX_IMAGE_PIXELS = MAX_RECETA_IMAGE_PIXELS
 
 
 class RecetaImageField(forms.ImageField):
@@ -33,12 +36,37 @@ class RecetaImageField(forms.ImageField):
             )
 
         try:
+            data.seek(0)
+            with catch_warnings():
+                simplefilter("error", Image.DecompressionBombWarning)
+                with Image.open(data) as original:
+                    if original.width * original.height > MAX_RECETA_IMAGE_PIXELS:
+                        raise forms.ValidationError(
+                            "La imagen excede la resolución máxima permitida de "
+                            "5 megapíxeles."
+                        )
+        except forms.ValidationError:
+            raise
+        except (Image.DecompressionBombError, Image.DecompressionBombWarning) as error:
+            raise forms.ValidationError(
+                "La imagen excede la resolución máxima permitida de 5 megapíxeles."
+            ) from error
+        except (OSError, TypeError, UnidentifiedImageError, ValueError) as error:
+            raise forms.ValidationError(
+                "El archivo debe ser una imagen JPG o PNG válida."
+            ) from error
+        finally:
+            data.seek(0)
+
+        try:
             with catch_warnings():
                 simplefilter("error", Image.DecompressionBombWarning)
                 imagen_validada = super().to_python(data)
+        except (Image.DecompressionBombError, Image.DecompressionBombWarning) as error:
+            raise forms.ValidationError(
+                "La imagen excede la resolución máxima permitida de 5 megapíxeles."
+            ) from error
         except (
-            Image.DecompressionBombError,
-            Image.DecompressionBombWarning,
             OSError,
             TypeError,
             UnidentifiedImageError,
@@ -114,7 +142,31 @@ class RecetaImageField(forms.ImageField):
         return super().to_python(SimpleUploadedFile(nombre, contenido, tipo))
 
 
+class SanitizedCharField(forms.CharField):
+    def to_python(self, value):
+        return super().to_python(normalizar_texto_seguro(value))
+
+
+class MaxLengthChoiceField(forms.ChoiceField):
+    def __init__(self, *args, max_length, **kwargs):
+        self.max_length = max_length
+        super().__init__(*args, **kwargs)
+
+    def to_python(self, value):
+        value = super().to_python(value)
+        if value and len(value) > self.max_length:
+            raise forms.ValidationError(
+                f"El valor no puede superar {self.max_length} caracteres.",
+                code="max_length",
+            )
+        return value
+
+
 class VentaRecetaRetenidaForm(forms.ModelForm):
+    cliente_rut = SanitizedCharField(
+        label="RUT del cliente",
+        max_length=12,
+    )
     medicamento = forms.ModelChoiceField(
         label="Medicamento",
         queryset=Medicamento.objects.filter(
@@ -130,7 +182,7 @@ class VentaRecetaRetenidaForm(forms.ModelForm):
             attrs={"accept": "image/jpeg,image/png,.jpg,.jpeg,.png"}
         ),
     )
-    motivo_excepcion = forms.CharField(
+    motivo_excepcion = SanitizedCharField(
         label="Motivo para solicitar excepción",
         max_length=2000,
         required=False,
@@ -140,6 +192,10 @@ class VentaRecetaRetenidaForm(forms.ModelForm):
                 "maxlength": "2000",
             }
         ),
+    )
+    medico_prescriptor = SanitizedCharField(
+        label="Médico prescriptor",
+        max_length=200,
     )
 
     class Meta:
@@ -157,13 +213,20 @@ class VentaRecetaRetenidaForm(forms.ModelForm):
         }
 
     def clean_medico_prescriptor(self):
-        medico = self.cleaned_data["medico_prescriptor"].strip()
+        medico = normalizar_texto_seguro(
+            self.cleaned_data["medico_prescriptor"]
+        ).strip()
         if not medico:
             raise forms.ValidationError("Indica el médico prescriptor.")
         return medico
 
+    def clean_cliente_rut(self):
+        return normalizar_texto_seguro(self.cleaned_data["cliente_rut"]).strip()
+
     def clean_motivo_excepcion(self):
-        return self.cleaned_data["motivo_excepcion"].strip()
+        return normalizar_texto_seguro(
+            self.cleaned_data["motivo_excepcion"]
+        ).strip()
 
     def clean(self):
         cleaned_data = super().clean()
@@ -179,10 +242,11 @@ class VentaRecetaRetenidaForm(forms.ModelForm):
 
 
 class RevisionRecetaForm(forms.Form):
-    decision = forms.ChoiceField(
+    decision = MaxLengthChoiceField(
+        max_length=8,
         choices=(("aprobar", "Aprobar"), ("rechazar", "Rechazar")),
     )
-    observacion = forms.CharField(
+    observacion = SanitizedCharField(
         label="Motivo del rechazo",
         max_length=2000,
         required=False,
@@ -190,7 +254,7 @@ class RevisionRecetaForm(forms.Form):
     )
 
     def clean_observacion(self):
-        return self.cleaned_data["observacion"].strip()
+        return normalizar_texto_seguro(self.cleaned_data["observacion"]).strip()
 
     def clean(self):
         cleaned_data = super().clean()
@@ -206,10 +270,11 @@ class RevisionRecetaForm(forms.Form):
 
 
 class ResolverAutorizacionForm(forms.Form):
-    decision = forms.ChoiceField(
+    decision = MaxLengthChoiceField(
+        max_length=8,
         choices=(("aprobar", "Aprobar excepción"), ("rechazar", "Rechazar excepción")),
     )
-    respuesta = forms.CharField(
+    respuesta = SanitizedCharField(
         label="Motivo del rechazo",
         max_length=2000,
         required=False,
@@ -217,7 +282,7 @@ class ResolverAutorizacionForm(forms.Form):
     )
 
     def clean_respuesta(self):
-        return self.cleaned_data["respuesta"].strip()
+        return normalizar_texto_seguro(self.cleaned_data["respuesta"]).strip()
 
     def clean(self):
         cleaned_data = super().clean()

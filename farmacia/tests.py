@@ -8,8 +8,10 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.conf import settings
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import IntegrityError, transaction
 from django.db.utils import OperationalError
 from django.http import QueryDict
 from django.test import Client, RequestFactory, TestCase, override_settings
@@ -26,6 +28,8 @@ from farmacia.models import (
     ConsultaJefeFarmacia,
     IngresoInventario,
     MAX_RECETA_UPLOAD_BYTES,
+    MAX_RECETA_IMAGE_PIXELS,
+    DetalleVentaCaja,
     Medicamento,
     Merma,
     SimulacionPago,
@@ -33,13 +37,15 @@ from farmacia.models import (
     VentaCaja,
     validar_archivo_receta,
 )
-from farmacia.receta_forms import VentaRecetaRetenidaForm
+from farmacia.receta_forms import RevisionRecetaForm, VentaRecetaRetenidaForm
 
 User = get_user_model()
 
 
 class AccesoYFarmaciaTests(TestCase):
     def setUp(self):
+        cache.clear()
+        self.addCleanup(cache.clear)
         self.admin = User.objects.create_superuser(
             username="jefe",
             email="jefe@example.com",
@@ -63,12 +69,31 @@ class AccesoYFarmaciaTests(TestCase):
 
         self.assertEqual(respuesta["X-Frame-Options"], "DENY")
         self.assertEqual(respuesta["X-Content-Type-Options"], "nosniff")
+        self.assertEqual(
+            respuesta["Cross-Origin-Opener-Policy"],
+            "same-origin",
+        )
+        self.assertEqual(respuesta["Referrer-Policy"], "same-origin")
+        self.assertIn("default-src 'self'", respuesta["Content-Security-Policy"])
         self.assertEqual(settings.X_FRAME_OPTIONS, "DENY")
         self.assertTrue(settings.SESSION_COOKIE_HTTPONLY)
         self.assertTrue(settings.CSRF_COOKIE_HTTPONLY)
         self.assertEqual(settings.SESSION_COOKIE_SAMESITE, "Lax")
         self.assertEqual(settings.CSRF_COOKIE_SAMESITE, "Lax")
         self.assertTrue(settings.SESSION_EXPIRE_AT_BROWSER_CLOSE)
+        self.assertEqual(settings.SECURE_REFERRER_POLICY, "same-origin")
+        self.assertEqual(
+            settings.SECURE_CROSS_ORIGIN_OPENER_POLICY,
+            "same-origin",
+        )
+        self.assertEqual(settings.DATA_UPLOAD_MAX_MEMORY_SIZE, 2_621_440)
+        self.assertEqual(settings.FILE_UPLOAD_MAX_MEMORY_SIZE, 2_621_440)
+        self.assertEqual(settings.DATA_UPLOAD_MAX_NUMBER_FIELDS, 100)
+        self.assertEqual(settings.DATA_UPLOAD_MAX_NUMBER_FILES, 10)
+        self.assertEqual(
+            settings.DATABASES["default"]["OPTIONS"]["timeout"],
+            20,
+        )
         csrf_cookie = respuesta.cookies[settings.CSRF_COOKIE_NAME]
         self.assertEqual(csrf_cookie["httponly"], True)
 
@@ -104,6 +129,217 @@ class AccesoYFarmaciaTests(TestCase):
             self.client.cookies[settings.SESSION_COOKIE_NAME].value,
             session_key_anterior,
         )
+
+    def test_login_usa_el_mismo_mensaje_para_credenciales_invalidas(self):
+        usuario_no_autorizado = User.objects.create_user(
+            username="usuario_no_autorizado",
+            password="Usuario-password-123",
+        )
+        intentos = (
+            ("usuario_inexistente", "Cualquier-password-123"),
+            (self.admin.username, "Contraseña-incorrecta-123"),
+            (usuario_no_autorizado.username, "Usuario-password-123"),
+        )
+        errores = []
+
+        for username, password in intentos:
+            respuesta = self.client.post(
+                reverse("login"),
+                {"username": username, "password": password},
+            )
+            self.assertEqual(respuesta.status_code, 200)
+            self.assertContains(respuesta, "Usuario o contraseña incorrectos.")
+            errores.append(str(respuesta.context["form"].non_field_errors()))
+
+        self.assertEqual(len(set(errores)), 1)
+
+    def test_login_y_caja_responden_429_al_superar_quince_post_por_minuto(self):
+        login_url = reverse("login")
+        for intento in range(settings.FARMACIA_RATE_LIMIT_REQUESTS):
+            respuesta = self.client.post(
+                login_url,
+                {
+                    "username": "usuario_inexistente",
+                    "password": f"Clave-invalida-{intento}",
+                },
+                HTTP_ACCEPT="application/json",
+            )
+            self.assertEqual(respuesta.status_code, 200)
+
+        respuesta = self.client.post(
+            login_url,
+            {"username": "usuario_inexistente", "password": "Clave-invalida"},
+            HTTP_ACCEPT="application/json",
+        )
+        self.assertEqual(respuesta.status_code, 429)
+        self.assertEqual(
+            respuesta.json()["codigo"],
+            "LIMITE_DE_SOLICITUDES",
+        )
+        self.assertEqual(
+            respuesta["Retry-After"],
+            str(settings.FARMACIA_RATE_LIMIT_WINDOW_SECONDS),
+        )
+
+        cache.clear()
+        quimico = self.crear_quimico("quimico_rate_limit_caja")
+        self.client.force_login(quimico)
+        caja_url = reverse("farmacia:caja")
+        for _ in range(settings.FARMACIA_RATE_LIMIT_REQUESTS):
+            respuesta = self.client.post(
+                caja_url,
+                {"accion": "vaciar"},
+            )
+            self.assertEqual(respuesta.status_code, 302)
+
+        respuesta = self.client.post(
+            caja_url,
+            {"accion": "vaciar"},
+            HTTP_ACCEPT="application/json",
+        )
+        self.assertEqual(respuesta.status_code, 429)
+        self.assertEqual(
+            respuesta.json()["codigo"],
+            "LIMITE_DE_SOLICITUDES",
+        )
+
+    def test_sesion_tiene_expiracion_de_ocho_horas_y_cookies_protegidas(self):
+        self.assertEqual(settings.SESSION_COOKIE_AGE, 28800)
+        self.assertTrue(settings.SESSION_EXPIRE_AT_BROWSER_CLOSE)
+
+        respuesta = self.client.post(
+            reverse("login"),
+            {
+                "username": self.admin.username,
+                "password": "Admin-password-123",
+            },
+        )
+        self.assertEqual(respuesta.status_code, 302)
+        cookie_sesion = respuesta.cookies[settings.SESSION_COOKIE_NAME]
+        self.assertTrue(cookie_sesion["httponly"])
+        self.assertEqual(cookie_sesion["samesite"], "Lax")
+        self.assertEqual(
+            bool(cookie_sesion["secure"]),
+            settings.SESSION_COOKIE_SECURE,
+        )
+        self.assertEqual(self.client.session.get_expiry_age(), 28800)
+
+    def test_login_rechaza_redireccion_externa_en_next(self):
+        quimico = self.crear_quimico("quimico_next_externo")
+
+        for destino in (
+            "http://sitio-malicioso.com/",
+            "//sitio-malicioso.com/",
+            "\\\\sitio-malicioso.com\\",
+        ):
+            with self.subTest(destino=destino):
+                respuesta = Client().post(
+                    reverse("login"),
+                    {
+                        "username": quimico.username,
+                        "password": "Quimico-password-123",
+                        "next": destino,
+                    },
+                )
+                self.assertEqual(respuesta.status_code, 302)
+                self.assertEqual(
+                    respuesta["Location"],
+                    reverse("farmacia:inicio"),
+                )
+
+    def test_politica_csp_usa_nonce_en_scripts_y_estilos_inline(self):
+        quimico = self.crear_quimico("quimico_nonce_csp")
+        self.client.force_login(quimico)
+
+        caja = self.client.get(reverse("farmacia:caja"))
+        nonce_caja = caja.wsgi_request.csp_nonce
+        self.assertIn(
+            f"script-src 'self' 'nonce-{nonce_caja}'",
+            caja["Content-Security-Policy"],
+        )
+        self.assertContains(
+            caja,
+            f'<script nonce="{nonce_caja}">',
+            html=False,
+        )
+
+        recetas = self.client.get(reverse("farmacia:recetas_retenidas"))
+        nonce_recetas = recetas.wsgi_request.csp_nonce
+        self.assertContains(
+            recetas,
+            f'<style nonce="{nonce_recetas}">',
+            html=False,
+        )
+        self.assertIn(
+            f"style-src 'self' 'nonce-{nonce_recetas}'",
+            recetas["Content-Security-Policy"],
+        )
+
+    def test_parametros_de_pagina_y_ids_fuera_de_rango_responden_controlados(self):
+        self.client.force_login(self.admin)
+        casos_get_invalidos = (
+            reverse("farmacia:caja")
+            + "?page=999999999999999999999",
+            reverse("farmacia:caja") + "?id=abc",
+            reverse("farmacia:recetas_retenidas")
+            + "?pagina_pendientes=1.5",
+            reverse("farmacia:consultas_jefe")
+            + "?pagina_historial=abc",
+        )
+        for url in casos_get_invalidos:
+            with self.subTest(url=url):
+                respuesta = self.client.get(url)
+                self.assertEqual(respuesta.status_code, 400)
+
+        id_fuera_de_rango = 2**63
+        respuesta = self.client.get(
+            f"/farmacia/recetas-retenidas/{id_fuera_de_rango}/foto/"
+        )
+        self.assertEqual(respuesta.status_code, 404)
+
+    def test_catalogos_de_inicio_y_caja_se_paginan_en_bloques_de_cincuenta(self):
+        Medicamento.objects.bulk_create(
+            [
+                Medicamento(
+                    codigo=f"PAG-{indice:03}",
+                    nombre=f"Producto paginado {indice:03}",
+                )
+                for indice in range(51)
+            ]
+        )
+        self.client.force_login(self.admin)
+
+        primera_pagina = self.client.get(reverse("farmacia:inicio"))
+        segunda_pagina = self.client.get(
+            reverse("farmacia:inicio"),
+            {"page": "2"},
+        )
+        self.assertEqual(len(primera_pagina.context["medicamentos"]), 50)
+        self.assertEqual(len(segunda_pagina.context["medicamentos"]), 1)
+        self.assertContains(primera_pagina, "Páginas del catálogo", html=False)
+
+        primera_pagina_caja = self.client.get(reverse("farmacia:caja"))
+        segunda_pagina_caja = self.client.get(
+            reverse("farmacia:caja"),
+            {"page": "2"},
+        )
+        self.assertEqual(
+            len(primera_pagina_caja.context["medicamentos"]),
+            50,
+        )
+        self.assertEqual(len(segunda_pagina_caja.context["medicamentos"]), 1)
+
+    def test_campos_de_texto_y_decision_rechazan_payloads_masivos(self):
+        with self.assertRaises(ValidationError):
+            ConsultaJefeFarmaciaForm.base_fields["pregunta"].clean("x" * 5001)
+        with self.assertRaises(ValidationError):
+            VentaRecetaRetenidaForm.base_fields["motivo_excepcion"].clean(
+                "x" * 2001
+            )
+        with self.assertRaises(ValidationError):
+            RevisionRecetaForm.base_fields["decision"].clean(
+                "aprobar" + "x" * 10000
+            )
 
     def test_formularios_no_exponen_campos_de_rol_o_estado_interno(self):
         from farmacia.admin import FarmaGroupChangeForm, FarmaUserChangeForm
@@ -204,7 +440,7 @@ class AccesoYFarmaciaTests(TestCase):
         )
 
         self.assertEqual(respuesta.status_code, 200)
-        self.assertContains(respuesta, "exclusiva para personal autorizado")
+        self.assertContains(respuesta, "Usuario o contraseña incorrectos.")
         self.assertFalse("_auth_user_id" in self.client.session)
         usuario.refresh_from_db()
         self.assertFalse(usuario.is_staff)
@@ -227,7 +463,7 @@ class AccesoYFarmaciaTests(TestCase):
         )
 
         self.assertEqual(respuesta.status_code, 200)
-        self.assertContains(respuesta, "exclusiva para personal autorizado")
+        self.assertContains(respuesta, "Usuario o contraseña incorrectos.")
 
     def test_quimico_va_a_su_inicio_de_farmacia_al_iniciar_sesion(self):
         quimico = User.objects.create_user(
@@ -424,6 +660,10 @@ class AccesoYFarmaciaTests(TestCase):
                 "accion": "confirmar_venta",
                 "checkout_key": checkout_key,
                 "medio_pago": SimulacionPago.MedioPago.DEBITO,
+                "precio": "0.01",
+                "precio_unitario": "0.01",
+                "subtotal": "0.01",
+                "total": "0.01",
             },
         )
 
@@ -436,6 +676,15 @@ class AccesoYFarmaciaTests(TestCase):
         pago = SimulacionPago.objects.get(venta_caja=venta)
         self.assertEqual(venta.cajero, quimico)
         self.assertEqual(venta.total, Decimal("5000.00"))
+        self.assertEqual(
+            list(
+                venta.detalles.order_by("pk").values_list(
+                    "precio_unitario",
+                    flat=True,
+                )
+            ),
+            [Decimal("1250.00"), Decimal("1250.00")],
+        )
         self.assertEqual(pago.estado, SimulacionPago.Estado.APROBADO)
         self.assertEqual(pago.medio_pago, SimulacionPago.MedioPago.DEBITO)
         pagos = self.client.get(reverse("farmacia:caja"))
@@ -560,7 +809,12 @@ class AccesoYFarmaciaTests(TestCase):
         )
         self.client.force_login(quimico)
 
-        for medicamento_id in ("no-es-un-id", "-1", "9" * 30):
+        for medicamento_id in (
+            "no-es-un-id",
+            "-1",
+            "9" * 30,
+            f"0{medicamento.pk}",
+        ):
             with self.subTest(medicamento_id=medicamento_id):
                 respuesta = self.client.post(
                     reverse("farmacia:caja"),
@@ -682,6 +936,22 @@ class AccesoYFarmaciaTests(TestCase):
         self.assertEqual(respuesta.status_code, 200)
         self.assertContains(respuesta, "No encontramos productos")
 
+    def test_busqueda_caja_rechaza_texto_excesivamente_largo(self):
+        quimico = self.crear_quimico("quimico_busqueda_larga")
+        self.client.force_login(quimico)
+
+        respuesta = self.client.get(
+            reverse("farmacia:caja"),
+            {"q": "x" * 201},
+        )
+
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertContains(
+            respuesta,
+            "La búsqueda no puede superar los 200 caracteres.",
+            status_code=400,
+        )
+
     def test_caja_rechaza_folio_de_otro_medicamento(self):
         quimico = self.crear_quimico("quimico_folio_otro_medicamento")
         medicamento_recetado = Medicamento.objects.create(
@@ -711,7 +981,8 @@ class AccesoYFarmaciaTests(TestCase):
             medico_prescriptor="Dra. Ejemplo",
             auditor_qf=quimico,
         )
-        receta.aprobar(quimico)
+        jefe = self.crear_jefe("jefe_folio_otro_medicamento")
+        receta.aprobar(jefe)
         self.addCleanup(lambda: receta.foto_receta.delete(save=False))
         self.client.force_login(quimico)
 
@@ -753,7 +1024,8 @@ class AccesoYFarmaciaTests(TestCase):
             medico_prescriptor="Dra. Ejemplo",
             auditor_qf=quimico,
         )
-        receta.aprobar(quimico)
+        jefe = self.crear_jefe("jefe_cantidad_receta")
+        receta.aprobar(jefe)
         self.addCleanup(lambda: receta.foto_receta.delete(save=False))
         self.client.force_login(quimico)
 
@@ -847,7 +1119,8 @@ class AccesoYFarmaciaTests(TestCase):
             medico_prescriptor="Dra. Ejemplo",
             auditor_qf=quimico,
         )
-        venta_receta.aprobar(quimico)
+        jefe = self.crear_jefe("jefe_receta_checkout")
+        venta_receta.aprobar(jefe)
         self.addCleanup(lambda: venta_receta.foto_receta.delete(save=False))
         self.client.force_login(quimico)
 
@@ -882,6 +1155,7 @@ class AccesoYFarmaciaTests(TestCase):
         self.assertEqual(venta_receta.estado, VentaRecetaRetenida.Estado.DISPENSADA)
         self.assertEqual(venta_receta.venta_caja, venta_caja)
         self.assertEqual(venta_caja.detalles.get().cantidad, 2)
+        self.assertEqual(venta_caja.detalles.get().receta, venta_receta)
 
         respuesta = self.client.post(
             reverse("farmacia:caja"),
@@ -897,6 +1171,104 @@ class AccesoYFarmaciaTests(TestCase):
         self.assertEqual(respuesta.status_code, 400)
         self.assertEqual(respuesta.json()["error"], "prescription_required")
         self.assertEqual(self.client.session.get("farmacia_caja_carrito", {}), {})
+
+        session = self.client.session
+        session["farmacia_caja_carrito"] = {str(medicamento.pk): 1}
+        session["farmacia_caja_recetas"] = {
+            str(medicamento.pk): venta_receta.pk
+        }
+        session.save()
+        checkout_key = self.client.get(reverse("farmacia:caja")).context[
+            "checkout_key"
+        ]
+        doble_dispensacion = self.client.post(
+            reverse("farmacia:caja"),
+            {
+                "accion": "confirmar_venta",
+                "checkout_key": checkout_key,
+                "medio_pago": SimulacionPago.MedioPago.EFECTIVO,
+            },
+            HTTP_ACCEPT="application/json",
+        )
+        self.assertEqual(doble_dispensacion.status_code, 400)
+        self.assertEqual(
+            doble_dispensacion.json()["codigo"],
+            "RECETA_YA_UTILIZADA",
+        )
+        self.assertEqual(VentaCaja.objects.count(), 1)
+
+        with patch(
+            "farmacia.views._registrar_venta_simulada",
+            side_effect=IntegrityError("unique constraint failed"),
+        ):
+            error_integridad = self.client.post(
+                reverse("farmacia:caja"),
+                {
+                    "accion": "confirmar_venta",
+                    "checkout_key": checkout_key,
+                    "medio_pago": SimulacionPago.MedioPago.EFECTIVO,
+                },
+                HTTP_ACCEPT="application/json",
+            )
+        self.assertEqual(error_integridad.status_code, 400)
+        self.assertEqual(
+            error_integridad.json()["codigo"],
+            "RECETA_YA_UTILIZADA",
+        )
+
+    def test_base_de_datos_impide_asociar_una_receta_a_dos_ventas(self):
+        quimico = self.crear_quimico("quimico_receta_unica")
+        medicamento = Medicamento.objects.create(
+            codigo="MED-RECETA-UNICA-DETALLE",
+            nombre="Medicamento para receta única",
+            precio=Decimal("1000.00"),
+            requiere_receta=True,
+        )
+        ingreso = IngresoInventario.objects.create(
+            medicamento=medicamento,
+            lote="LOTE-RECETA-UNICA-DETALLE",
+            cantidad=5,
+            fecha_vencimiento=timezone.localdate() + timedelta(days=60),
+            registrado_por=self.admin,
+        )
+        receta = VentaRecetaRetenida.objects.create(
+            cliente_rut="11111111-1",
+            medicamento=medicamento,
+            cantidad=1,
+            foto_receta=self.crear_imagen_receta(),
+            medico_prescriptor="Dra. Ejemplo",
+            auditor_qf=quimico,
+        )
+        self.addCleanup(lambda: receta.foto_receta.delete(save=False))
+        venta_original = VentaCaja.objects.create(
+            cajero=quimico,
+            total=Decimal("1000.00"),
+        )
+        VentaRecetaRetenida.objects.filter(pk=receta.pk).update(
+            estado=VentaRecetaRetenida.Estado.DISPENSADA,
+            venta_caja=venta_original,
+        )
+        DetalleVentaCaja.objects.create(
+            venta=venta_original,
+            ingreso=ingreso,
+            receta=receta,
+            cantidad=1,
+            precio_unitario=Decimal("1000.00"),
+        )
+        otra_venta = VentaCaja.objects.create(
+            cajero=quimico,
+            total=Decimal("1000.00"),
+        )
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                DetalleVentaCaja.objects.create(
+                    venta=otra_venta,
+                    ingreso=ingreso,
+                    receta=receta,
+                    cantidad=1,
+                    precio_unitario=Decimal("1000.00"),
+                )
 
     def test_caja_responde_400_json_si_stock_es_insuficiente(self):
         quimico = self.crear_quimico("quimico_receta_stock_insuficiente")
@@ -1167,6 +1539,90 @@ class AccesoYFarmaciaTests(TestCase):
         self.assertTrue(respuesta.context["form"].errors["foto_receta"])
         self.assertFalse(VentaRecetaRetenida.objects.exists())
 
+    def test_receta_rechaza_imagen_de_mas_de_cinco_megapixeles(self):
+        from farmacia.receta_forms import RecetaImageField
+
+        self.assertEqual(Image.MAX_IMAGE_PIXELS, MAX_RECETA_IMAGE_PIXELS)
+        archivo = BytesIO()
+        Image.new("RGB", (2500, 2100), color="white").save(
+            archivo,
+            format="PNG",
+        )
+
+        with self.assertRaisesMessage(
+            ValidationError,
+            "La imagen excede la resolución máxima permitida de 5 megapíxeles.",
+        ):
+            RecetaImageField().clean(
+                SimpleUploadedFile(
+                    "pixel-bomb.png",
+                    archivo.getvalue(),
+                    content_type="image/png",
+                )
+            )
+
+    def test_formulario_normaliza_rut_con_nul_y_unicode_y_nombre_de_medicamento(self):
+        from farmacia.receta_forms import VentaRecetaRetenidaForm
+
+        quimico = self.crear_quimico("auditor_unicode_rut")
+        medicamento = Medicamento.objects.create(
+            codigo="MED-UNICODE-RUT",
+            nombre="Medicamento de prueba",
+            requiere_receta=True,
+        )
+        self.client.force_login(quimico)
+
+        form = VentaRecetaRetenidaForm(
+            data={
+                "cliente_rut": "１１１１\u200b１１１１-\x001",
+                "medicamento": medicamento.pk,
+                "cantidad": "1",
+                "medico_prescriptor": " Dra.\x00\u200b Ejemplo ",
+                "motivo_excepcion": " Justificación%00 válida ",
+            },
+            files={"foto_receta": self.crear_imagen_receta()},
+        )
+
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data["cliente_rut"], "11111111-1")
+        self.assertEqual(form.cleaned_data["medico_prescriptor"], "Dra. Ejemplo")
+        self.assertEqual(
+            form.cleaned_data["motivo_excepcion"],
+            "Justificación válida",
+        )
+        formulario_solo_espacios = VentaRecetaRetenidaForm(
+            data={
+                "cliente_rut": "11111111-1",
+                "medicamento": medicamento.pk,
+                "cantidad": "1",
+                "medico_prescriptor": " " * 10_000,
+            },
+            files={"foto_receta": self.crear_imagen_receta()},
+        )
+        self.assertFalse(formulario_solo_espacios.is_valid())
+        self.assertIn(
+            "medico_prescriptor",
+            formulario_solo_espacios.errors,
+        )
+        formulario_truncado = VentaRecetaRetenidaForm(
+            data={
+                "cliente_rut": "11111111-1",
+                "medicamento": medicamento.pk,
+                "cantidad": "1",
+                "medico_prescriptor": "D" * 201,
+            },
+            files={"foto_receta": self.crear_imagen_receta()},
+        )
+        self.assertFalse(formulario_truncado.is_valid())
+        self.assertIn("medico_prescriptor", formulario_truncado.errors)
+
+        medicamento_sin_normalizar = Medicamento(
+            codigo="MED-NORMALIZAR-NOMBRE",
+            nombre="  Ａspi\u200brina\x00  ",
+        )
+        medicamento_sin_normalizar.full_clean()
+        self.assertEqual(medicamento_sin_normalizar.nombre, "Aspirina")
+
     def test_receta_rechaza_svg_y_parametros_repetidos(self):
         quimico = self.crear_quimico("auditor_svg_y_repetidos")
         medicamento = Medicamento.objects.create(
@@ -1208,6 +1664,8 @@ class AccesoYFarmaciaTests(TestCase):
         self.assertFalse(VentaRecetaRetenida.objects.exists())
 
     def test_nombre_de_archivo_de_receta_no_puede_salir_de_su_directorio(self):
+        from farmacia.storage import PrivatePrescriptionStorage
+
         quimico = self.crear_quimico("auditor_nombre_archivo")
         medicamento = Medicamento.objects.create(
             codigo="MED-NOMBRE-ARCHIVO",
@@ -1238,6 +1696,21 @@ class AccesoYFarmaciaTests(TestCase):
         self.addCleanup(lambda: receta.foto_receta.delete(save=False))
         self.assertTrue(receta.foto_receta.name.startswith("recetas_retenidas/"))
         self.assertNotIn("..", receta.foto_receta.name)
+        self.assertRegex(
+            receta.foto_receta.name,
+            r"^recetas_retenidas/\d{4}/\d{2}/[0-9a-f]{32}\.png$",
+        )
+        nombre_normalizado = PrivatePrescriptionStorage().get_valid_name(
+            "receta%00\x00Ａ.png"
+        )
+        self.assertEqual(nombre_normalizado, "recetaA.png")
+        nombre_almacenado = PrivatePrescriptionStorage().get_available_name(
+            "recetas_retenidas/2026/11/nombre-original.png"
+        )
+        self.assertRegex(
+            nombre_almacenado,
+            r"^recetas_retenidas[\\/]2026[\\/]11[\\/][0-9a-f]{32}\.png$",
+        )
 
     def test_jefe_debe_resolver_excepcion_antes_de_aprobar_mas_de_seis(self):
         quimico = self.crear_quimico("auditor_excepcion")
@@ -1310,12 +1783,34 @@ class AccesoYFarmaciaTests(TestCase):
         )
         self.addCleanup(lambda: venta.foto_receta.delete(save=False))
         self.client.force_login(quimico)
+        with self.assertRaises(PermissionDenied):
+            venta.aprobar(quimico)
 
-        no_autorizado = self.client.post(
-            reverse("farmacia:resolver_receta_retenida", args=(venta.pk,)),
-            {"decision": "rechazar", "observacion": "Motivo"},
+        listado = self.client.get(reverse("farmacia:recetas_retenidas"))
+        self.assertEqual(listado.status_code, 200)
+        self.assertNotContains(listado, "Aprobar mi receta")
+
+        for decision, datos in (
+            ("aprobar", {"decision": "aprobar"}),
+            (
+                "rechazar",
+                {"decision": "rechazar", "observacion": "Motivo"},
+            ),
+        ):
+            with self.subTest(decision=decision):
+                no_autorizado = self.client.post(
+                    reverse(
+                        "farmacia:resolver_receta_retenida",
+                        args=(venta.pk,),
+                    ),
+                    datos,
+                )
+                self.assertEqual(no_autorizado.status_code, 403)
+        venta.refresh_from_db()
+        self.assertEqual(
+            venta.estado,
+            VentaRecetaRetenida.Estado.PENDIENTE_REVISION,
         )
-        self.assertEqual(no_autorizado.status_code, 403)
 
         jefe = User.objects.create_user(username="jefe_rechazo", is_active=True)
         jefe.groups.add(Group.objects.get_or_create(name=GRUPO_JEFE_FARMACIA)[0])
@@ -1456,6 +1951,11 @@ class AccesoYFarmaciaTests(TestCase):
         quimico.groups.add(Group.objects.get_or_create(name=GRUPO_FARMACEUTICO)[0])
         return quimico
 
+    def crear_jefe(self, username="jefe_farmacia"):
+        jefe = User.objects.create_user(username=username, is_active=True)
+        jefe.groups.add(Group.objects.get_or_create(name=GRUPO_JEFE_FARMACIA)[0])
+        return jefe
+
     def test_quimico_envia_consulta_con_foto_y_solo_remitente_o_jefe_ve_la_foto(self):
         quimico = self.crear_quimico()
         self.client.force_login(quimico)
@@ -1482,6 +1982,10 @@ class AccesoYFarmaciaTests(TestCase):
         self.addCleanup(lambda: consulta.foto_receta.delete(save=False))
         self.assertEqual(consulta.solicitante, quimico)
         self.assertEqual(consulta.estado, ConsultaJefeFarmacia.Estado.PENDIENTE)
+        self.assertRegex(
+            consulta.foto_receta.name,
+            r"^consultas_jefe/\d{4}/\d{2}/[0-9a-f]{32}\.png$",
+        )
         self.assertIsNone(consulta.jefe_farmacia)
         self.assertEqual(consulta.respuesta, "")
 
@@ -1956,6 +2460,35 @@ class AccesoYFarmaciaTests(TestCase):
             respuesta.json()["message"],
             "La ruta solicitada no existe.",
         )
+
+    def test_vistas_de_recetas_y_consultas_devuelven_404_para_ids_inexistentes(self):
+        jefe = self.crear_jefe("jefe_ids_inexistentes")
+        self.client.force_login(jefe)
+
+        respuestas = (
+            self.client.get(
+                reverse("farmacia:foto_receta_retenida", args=(999999,))
+            ),
+            self.client.get(
+                reverse("farmacia:foto_consulta_jefe", args=(999999,))
+            ),
+            self.client.post(
+                reverse("farmacia:resolver_receta_retenida", args=(999999,)),
+                {"decision": "aprobar"},
+            ),
+            self.client.post(
+                reverse("farmacia:resolver_excepcion_receta", args=(999999,)),
+                {"decision": "aprobar"},
+            ),
+            self.client.post(
+                reverse("farmacia:consultas_jefe"),
+                {"consulta_id": "no-es-un-id", "respuesta": "Respuesta"},
+            ),
+        )
+
+        for respuesta in respuestas:
+            with self.subTest(status=respuesta.status_code):
+                self.assertEqual(respuesta.status_code, 404)
 
     def test_error_500_devuelve_json_seguro(self):
         from config.error_handlers import handler500

@@ -1,4 +1,5 @@
 import re
+import unicodedata
 import uuid
 from os.path import splitext
 from warnings import catch_warnings, simplefilter
@@ -21,8 +22,63 @@ MAX_UNIDADES_POR_RECETA = 6
 MAX_POSITIVE_INTEGER = 2_147_483_647
 MAX_POSITIVE_SMALL_INTEGER = 32_767
 MAX_RECETA_UPLOAD_BYTES = 5 * 1024 * 1024
-MAX_RECETA_IMAGE_PIXELS = 40_000_000
+MAX_RECETA_IMAGE_PIXELS = settings.RECETA_MAX_IMAGE_PIXELS
 EXTENSIONES_RECETA_PERMITIDAS = {".jpg", ".jpeg", ".png"}
+Image.MAX_IMAGE_PIXELS = MAX_RECETA_IMAGE_PIXELS
+
+
+def _ruta_imagen_receta(directorio, filename):
+    extension = splitext(filename)[1].lower()
+    if extension in {".jpg", ".jpeg"}:
+        extension = ".jpg"
+    elif extension != ".png":
+        raise ValidationError(
+            "La imagen debe ser JPG o PNG para poder guardarse."
+        )
+    fecha = timezone.localdate()
+    return (
+        f"{directorio}/{fecha:%Y/%m}/"
+        f"{uuid.uuid4().hex}{extension}"
+    )
+
+
+def receta_retenida_upload_to(instance, filename):
+    return _ruta_imagen_receta("recetas_retenidas", filename)
+
+
+def consulta_receta_upload_to(instance, filename):
+    return _ruta_imagen_receta("consultas_jefe", filename)
+
+
+def normalizar_texto_seguro(valor):
+    if valor is None:
+        return ""
+    if not isinstance(valor, str):
+        return valor
+    valor = valor.replace("\x00", "")
+    valor = re.sub(r"%00", "", valor, flags=re.IGNORECASE)
+    valor = unicodedata.normalize("NFKC", valor)
+    return "".join(
+        caracter
+        for caracter in valor
+        if caracter in "\t\n\r"
+        or unicodedata.category(caracter) not in {"Cc", "Cf", "Cs"}
+    )
+
+
+class SanitizaTextoMixin:
+    campos_texto_sanitizables = ()
+
+    def clean_fields(self, exclude=None):
+        excluidos = set(exclude or ())
+        for campo in self.campos_texto_sanitizables:
+            if campo not in excluidos:
+                setattr(
+                    self,
+                    campo,
+                    normalizar_texto_seguro(getattr(self, campo)),
+                )
+        super().clean_fields(exclude=exclude)
 
 
 def validar_archivo_receta(archivo):
@@ -49,14 +105,17 @@ def validar_archivo_receta(archivo):
                     )
                 if imagen.width * imagen.height > MAX_RECETA_IMAGE_PIXELS:
                     raise ValidationError(
-                        "La imagen supera el tamaño máximo permitido."
+                        "La imagen excede la resolución máxima permitida de "
+                        "5 megapíxeles."
                     )
                 imagen.verify()
     except ValidationError:
         raise
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning) as error:
+        raise ValidationError(
+            "La imagen excede la resolución máxima permitida de 5 megapíxeles."
+        ) from error
     except (
-        Image.DecompressionBombError,
-        Image.DecompressionBombWarning,
         OSError,
         TypeError,
         UnidentifiedImageError,
@@ -68,6 +127,7 @@ def validar_archivo_receta(archivo):
 
 
 def validar_rut_chileno(value):
+    value = normalizar_texto_seguro(value)
     rut = re.sub(r"[.\-\s]", "", value).upper()
     if not re.fullmatch(r"\d{1,8}[0-9K]", rut):
         raise ValidationError("Ingrese un RUT chileno válido.")
@@ -83,7 +143,13 @@ def validar_rut_chileno(value):
         raise ValidationError("El dígito verificador del RUT no es válido.")
 
 
-class VentaRecetaRetenida(models.Model):
+class VentaRecetaRetenida(SanitizaTextoMixin, models.Model):
+    campos_texto_sanitizables = (
+        "cliente_rut",
+        "medico_prescriptor",
+        "observacion_resolucion",
+    )
+
     class Estado(models.TextChoices):
         PENDIENTE_REVISION = "pendiente_revision", "Pendiente de revisión"
         APROBADA = "aprobada", "Aprobada"
@@ -120,7 +186,7 @@ class VentaRecetaRetenida(models.Model):
     )
     foto_receta = models.ImageField(
         "Foto de la receta",
-        upload_to="recetas_retenidas/%Y/%m/",
+        upload_to=receta_retenida_upload_to,
         storage=PrivatePrescriptionStorage(),
         validators=[validar_archivo_receta],
     )
@@ -193,6 +259,13 @@ class VentaRecetaRetenida(models.Model):
 
     def clean(self):
         super().clean()
+        self.cliente_rut = normalizar_texto_seguro(self.cliente_rut).strip()
+        self.medico_prescriptor = normalizar_texto_seguro(
+            self.medico_prescriptor
+        ).strip()
+        self.observacion_resolucion = normalizar_texto_seguro(
+            self.observacion_resolucion
+        ).strip()
         if self._state.adding and not self.medicamento_id:
             raise ValidationError(
                 {"medicamento": "Selecciona un medicamento del catálogo."}
@@ -220,23 +293,10 @@ class VentaRecetaRetenida(models.Model):
             )
         if self.revisado_por_id and not (
             self.revisado_por.is_superuser
-            or self.revisado_por.groups.filter(
-                name__in=(GRUPO_FARMACEUTICO, GRUPO_JEFE_FARMACIA)
-            ).exists()
+            or self.revisado_por.groups.filter(name=GRUPO_JEFE_FARMACIA).exists()
         ):
             raise ValidationError(
-                {"revisado_por": "El usuario no tiene un rol habilitado para revisar recetas."}
-            )
-        if (
-            self.revisado_por_id
-            and not self.revisado_por.is_superuser
-            and self.revisado_por.groups.filter(
-                name=GRUPO_FARMACEUTICO
-            ).exists()
-            and self.revisado_por_id != self.auditor_qf_id
-        ):
-            raise ValidationError(
-                {"revisado_por": "Auditor_QF solo puede aprobar sus propias recetas."}
+                {"revisado_por": "Solo el Jefe de Farmacia puede revisar recetas."}
             )
 
     def save(self, *args, **kwargs):
@@ -250,17 +310,12 @@ class VentaRecetaRetenida(models.Model):
             self.save(update_fields=("eliminado_en",))
 
     def aprobar(self, revisor):
-        es_jefe = (
-            revisor.is_superuser
-            or revisor.groups.filter(name=GRUPO_JEFE_FARMACIA).exists()
-        )
-        es_auditor_propio = (
-            revisor.groups.filter(name=GRUPO_FARMACEUTICO).exists()
-            and self.auditor_qf_id == revisor.pk
-        )
-        if not (es_jefe or es_auditor_propio):
+        es_jefe = revisor.is_superuser or revisor.groups.filter(
+            name=GRUPO_JEFE_FARMACIA
+        ).exists()
+        if not es_jefe:
             raise PermissionDenied(
-                "Solo Auditor_QF o el Jefe de Farmacia pueden aprobar una receta."
+                "Solo el Jefe de Farmacia puede aprobar una receta."
             )
 
         with transaction.atomic():
@@ -301,7 +356,7 @@ class VentaRecetaRetenida(models.Model):
             raise PermissionDenied(
                 "Solo el Jefe de Farmacia puede rechazar una receta."
             )
-        observacion = (observacion or "").strip()
+        observacion = normalizar_texto_seguro(observacion or "").strip()
         if not observacion:
             raise ValidationError(
                 {"observacion_resolucion": "Indica el motivo del rechazo."}
@@ -482,6 +537,14 @@ class DetalleVentaCaja(models.Model):
         related_name="detalles_venta",
         verbose_name="Lote descontado",
     )
+    receta = models.ForeignKey(
+        VentaRecetaRetenida,
+        on_delete=models.PROTECT,
+        related_name="detalles_dispensacion",
+        null=True,
+        blank=True,
+        verbose_name="Receta dispensada",
+    )
     cantidad = models.PositiveIntegerField(
         "Cantidad vendida",
         validators=[
@@ -500,6 +563,10 @@ class DetalleVentaCaja(models.Model):
         verbose_name = "detalle de venta"
         verbose_name_plural = "detalles de venta"
         constraints = [
+            models.UniqueConstraint(
+                fields=("receta",),
+                name="detalle_venta_receta_unica",
+            ),
             models.CheckConstraint(
                 check=Q(cantidad__gt=0),
                 name="detalle_venta_cantidad_positiva",
@@ -518,7 +585,9 @@ class DetalleVentaCaja(models.Model):
         return f"{self.ingreso.medicamento} × {self.cantidad}"
 
 
-class AutorizacionExcepcional(models.Model):
+class AutorizacionExcepcional(SanitizaTextoMixin, models.Model):
+    campos_texto_sanitizables = ("motivo", "respuesta_jefe")
+
     class Tipo(models.TextChoices):
         RECETA_ILEGIBLE = "receta_ilegible", "Receta poco legible"
         TOPE_MEDICAMENTOS = "tope_medicamentos", "Excepción al tope de medicamentos"
@@ -598,6 +667,10 @@ class AutorizacionExcepcional(models.Model):
     def clean(self):
         super().clean()
         errores = {}
+        self.motivo = normalizar_texto_seguro(self.motivo).strip()
+        self.respuesta_jefe = normalizar_texto_seguro(
+            self.respuesta_jefe
+        ).strip()
         self.motivo = (self.motivo or "").strip()
         if not self.motivo:
             errores["motivo"] = "Describe por qué se solicita la excepción."
@@ -633,7 +706,7 @@ class AutorizacionExcepcional(models.Model):
             raise PermissionDenied(
                 "Solo el Jefe de Farmacia puede resolver excepciones."
             )
-        respuesta = (respuesta or "").strip()
+        respuesta = normalizar_texto_seguro(respuesta or "").strip()
         if len(respuesta) > 2000:
             raise ValidationError(
                 {"respuesta_jefe": "La respuesta no puede superar los 2000 caracteres."}
@@ -771,7 +844,9 @@ class SolicitudCuenta(models.Model):
         return f"{self.usuario} — {self.get_rol_solicitado_display()} ({self.get_estado_display()})"
 
 
-class Medicamento(models.Model):
+class Medicamento(SanitizaTextoMixin, models.Model):
+    campos_texto_sanitizables = ("codigo", "nombre", "descripcion")
+
     codigo = models.CharField("Código de producto", max_length=50, unique=True)
     nombre = models.CharField("Nombre del medicamento", max_length=200)
     descripcion = models.TextField("Descripción", blank=True)
@@ -811,6 +886,14 @@ class Medicamento(models.Model):
             ),
         ]
 
+    def clean(self):
+        super().clean()
+        self.codigo = normalizar_texto_seguro(self.codigo).strip()
+        self.nombre = normalizar_texto_seguro(self.nombre).strip()
+        self.descripcion = normalizar_texto_seguro(self.descripcion).strip()
+        if not self.nombre:
+            raise ValidationError({"nombre": "Indica el nombre del medicamento."})
+
     @property
     def stock_actual(self):
         lotes_vigentes = self.ingresos.filter(
@@ -822,7 +905,9 @@ class Medicamento(models.Model):
         return f"{self.nombre} ({self.codigo})"
 
 
-class IngresoInventario(models.Model):
+class IngresoInventario(SanitizaTextoMixin, models.Model):
+    campos_texto_sanitizables = ("lote", "proveedor")
+
     medicamento = models.ForeignKey(
         Medicamento,
         on_delete=models.PROTECT,
@@ -870,6 +955,8 @@ class IngresoInventario(models.Model):
 
     def clean(self):
         super().clean()
+        self.lote = normalizar_texto_seguro(self.lote).strip()
+        self.proveedor = normalizar_texto_seguro(self.proveedor).strip()
         if (
             self.fecha_vencimiento
             and self.fecha_vencimiento < timezone.localdate()
@@ -903,7 +990,9 @@ class IngresoInventario(models.Model):
         return f"{self.medicamento} — Lote {self.lote}"
 
 
-class Merma(models.Model):
+class Merma(SanitizaTextoMixin, models.Model):
+    campos_texto_sanitizables = ("observacion",)
+
     class Motivo(models.TextChoices):
         VENCIDO = "vencido", "Producto vencido"
         DANADO = "danado", "Producto dañado"
@@ -946,7 +1035,9 @@ class Merma(models.Model):
 
     def clean(self):
         super().clean()
-        self.observacion = (self.observacion or "").strip()
+        self.observacion = normalizar_texto_seguro(
+            self.observacion or ""
+        ).strip()
         if not self.observacion:
             raise ValidationError(
                 {
@@ -995,7 +1086,9 @@ class Merma(models.Model):
         return f"Merma de {self.cantidad} unidades — {self.ingreso}"
 
 
-class ConsultaJefeFarmacia(models.Model):
+class ConsultaJefeFarmacia(SanitizaTextoMixin, models.Model):
+    campos_texto_sanitizables = ("asunto", "pregunta", "respuesta")
+
     class Estado(models.TextChoices):
         PENDIENTE = "pendiente", "Pendiente de respuesta"
         RESPONDIDA = "respondida", "Respondida"
@@ -1010,7 +1103,7 @@ class ConsultaJefeFarmacia(models.Model):
     pregunta = models.TextField("Consulta")
     foto_receta = models.ImageField(
         "Foto de la receta",
-        upload_to="consultas_jefe/%Y/%m/",
+        upload_to=consulta_receta_upload_to,
         storage=PrivatePrescriptionStorage(),
         validators=[validar_archivo_receta],
     )
@@ -1061,6 +1154,9 @@ class ConsultaJefeFarmacia(models.Model):
     def clean(self):
         super().clean()
         errores = {}
+        self.asunto = normalizar_texto_seguro(self.asunto).strip()
+        self.pregunta = normalizar_texto_seguro(self.pregunta).strip()
+        self.respuesta = normalizar_texto_seguro(self.respuesta).strip()
         if self.solicitante_id and not self.solicitante.groups.filter(
             name=GRUPO_FARMACEUTICO
         ).exists():
@@ -1087,7 +1183,7 @@ class ConsultaJefeFarmacia(models.Model):
             raise PermissionDenied(
                 "Solo el Jefe de Farmacia puede responder estas consultas."
             )
-        respuesta = respuesta.strip()
+        respuesta = normalizar_texto_seguro(respuesta).strip()
         if not respuesta:
             raise ValidationError(
                 {"respuesta": "Escribe una respuesta antes de enviarla."}

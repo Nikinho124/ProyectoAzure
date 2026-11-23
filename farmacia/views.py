@@ -1,20 +1,34 @@
+import hashlib
 from decimal import Decimal
+from functools import wraps
+from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 from PIL import Image
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.views import LoginView
+from django.core.cache import cache
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.db import connection, transaction
-from django.core.paginator import Paginator
-from django.http import FileResponse, Http404, JsonResponse
+from django.db import IntegrityError, connection, transaction
+from django.core.paginator import EmptyPage, Paginator
+from django.http import (
+    FileResponse,
+    Http404,
+    HttpResponse,
+    HttpResponseBadRequest,
+    JsonResponse,
+)
 from django.db.models import F, IntegerField, OuterRef, Q, Subquery, Sum, Value
 from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
+from django.utils.decorators import method_decorator
 from django.utils import timezone
+from django.utils.crypto import constant_time_compare
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_GET, require_http_methods
 
 from config.error_handlers import manejar_bloqueo_base_datos
@@ -31,6 +45,7 @@ from farmacia.models import (
     DetalleVentaCaja,
     VentaRecetaRetenida,
     VentaCaja,
+    normalizar_texto_seguro,
 )
 from farmacia.consulta_forms import ConsultaJefeFarmaciaForm
 from farmacia.receta_forms import (
@@ -40,12 +55,92 @@ from farmacia.receta_forms import (
 )
 
 
+def _incrementar_contador_rate_limit(clave, ventana):
+    if cache.add(clave, 1, timeout=ventana):
+        return 1
+    try:
+        return cache.incr(clave)
+    except ValueError:
+        cache.add(clave, 1, timeout=ventana)
+        return cache.get(clave, 1)
+
+
+def limitar_frecuencia_solicitudes(scope, methods=("POST",)):
+    limite = settings.FARMACIA_RATE_LIMIT_REQUESTS
+    ventana = settings.FARMACIA_RATE_LIMIT_WINDOW_SECONDS
+
+    def decorator(view):
+        @wraps(view)
+        def wrapped(request, *args, **kwargs):
+            if request.method not in methods:
+                return view(request, *args, **kwargs)
+
+            identidades = []
+            ip = request.META.get("REMOTE_ADDR")
+            if ip:
+                identidades.append(("ip", ip))
+            session_key = request.session.session_key
+            if session_key:
+                identidades.append(("session", session_key))
+            if not identidades:
+                identidades.append(("ip", "unknown"))
+
+            excedido = False
+            for tipo, identidad in identidades:
+                digest = hashlib.sha256(
+                    identidad.encode("utf-8")
+                ).hexdigest()
+                clave = f"farmacia:rate:{scope}:{tipo}:{digest}"
+                if _incrementar_contador_rate_limit(clave, ventana) > limite:
+                    excedido = True
+
+            if excedido:
+                datos = {
+                    "status": "error",
+                    "codigo": "LIMITE_DE_SOLICITUDES",
+                    "mensaje": (
+                        "Se superó el límite de solicitudes. "
+                        "Intenta nuevamente en un minuto."
+                    ),
+                }
+                if "application/json" in request.headers.get("Accept", ""):
+                    respuesta = JsonResponse(datos, status=429)
+                else:
+                    respuesta = HttpResponse(
+                        "<!doctype html><title>Demasiadas solicitudes</title>"
+                        "<h1>Demasiadas solicitudes</h1>"
+                        "<p>Intenta nuevamente en un minuto.</p>",
+                        status=429,
+                    )
+                respuesta["Retry-After"] = str(ventana)
+                respuesta["Cache-Control"] = "no-store"
+                return respuesta
+
+            return view(request, *args, **kwargs)
+
+        return wrapped
+
+    return decorator
+
+
+@method_decorator(limitar_frecuencia_solicitudes("login"), name="dispatch")
 class IniciarSesionView(LoginView):
     template_name = "farmacia/login.html"
     authentication_form = EmployeeAuthenticationForm
     redirect_authenticated_user = True
 
     def get_success_url(self):
+        redirect_to = self.request.POST.get("next") or self.request.GET.get("next")
+        if redirect_to:
+            if url_has_allowed_host_and_scheme(
+                redirect_to,
+                allowed_hosts={self.request.get_host()},
+                require_https=self.request.is_secure(),
+            ):
+                if urlsplit(redirect_to).path not in {"", "/"}:
+                    return redirect_to
+            else:
+                return reverse("farmacia:inicio")
         if self.request.user.is_staff:
             return reverse("admin:index")
         return reverse("farmacia:inicio")
@@ -61,6 +156,40 @@ def _es_personal_farmacia(user):
             ).exists()
         )
     )
+
+
+def _validar_parametros_get(request, permitidos):
+    if set(request.GET.keys()).difference(permitidos):
+        return HttpResponseBadRequest("La solicitud incluye parámetros no admitidos.")
+    return None
+
+
+def _numero_pagina(request, parametro):
+    valores = request.GET.getlist(parametro)
+    if not valores:
+        return 1, None
+    valor = valores[0]
+    if (
+        len(valores) != 1
+        or not valor
+        or len(valor) > 6
+        or not valor.isascii()
+        or not valor.isdecimal()
+        or valor.startswith("0")
+    ):
+        return None, HttpResponseBadRequest("El número de página no es válido.")
+
+    pagina = int(valor)
+    if pagina > 10_000:
+        return None, HttpResponseBadRequest("El número de página no es válido.")
+    return pagina, None
+
+
+def _paginar_queryset(queryset, numero_pagina, cantidad):
+    try:
+        return Paginator(queryset, cantidad).page(numero_pagina), None
+    except EmptyPage:
+        return None, HttpResponseBadRequest("La página solicitada no existe.")
 
 
 def _validar_payload_formulario(request, campos, archivos=()):
@@ -136,6 +265,12 @@ def _medicamentos_con_stock():
 @require_GET
 @login_required
 def inicio_farmacia(request):
+    respuesta = _validar_parametros_get(request, {"page"})
+    if respuesta:
+        return respuesta
+    numero_pagina, respuesta = _numero_pagina(request, "page")
+    if respuesta:
+        return respuesta
     if not _es_personal_farmacia(request.user):
         raise PermissionDenied
 
@@ -148,11 +283,19 @@ def inicio_farmacia(request):
         consultas_pendientes = consultas_pendientes.filter(
             solicitante=request.user
         )
+    pagina_medicamentos, respuesta = _paginar_queryset(
+        medicamentos.order_by("nombre"),
+        numero_pagina,
+        50,
+    )
+    if respuesta:
+        return respuesta
     return render(
         request,
         "farmacia/inicio_farmacia.html",
         {
-            "medicamentos": medicamentos.order_by("nombre"),
+            "medicamentos": pagina_medicamentos,
+            "pagina_medicamentos": pagina_medicamentos,
             "total_medicamentos": medicamentos.count(),
             "total_disponibles": disponibles.count(),
             "consultas_pendientes": consultas_pendientes.count(),
@@ -174,6 +317,19 @@ def recetas_retenidas(request):
     es_auditor = _es_auditor_qf(request.user)
     if not (es_jefe or es_auditor):
         raise PermissionDenied
+    parametros_pagina = (
+        "pagina_pendientes",
+        "pagina_historial",
+        "pagina_excepciones",
+    )
+    respuesta = _validar_parametros_get(request, set(parametros_pagina))
+    if respuesta:
+        return respuesta
+    paginas = {}
+    for parametro in parametros_pagina:
+        paginas[parametro], respuesta = _numero_pagina(request, parametro)
+        if respuesta:
+            return respuesta
 
     form = None
     if request.method == "POST":
@@ -218,7 +374,7 @@ def recetas_retenidas(request):
     ventas = VentaRecetaRetenida.objects.select_related(
         "auditor_qf",
         "jefe_farmacia",
-    )
+    ).prefetch_related("autorizaciones_excepcionales")
     autorizaciones = AutorizacionExcepcional.objects.select_related(
         "venta",
         "solicitada_por",
@@ -243,6 +399,28 @@ def recetas_retenidas(request):
         )
         excepciones_pendientes = AutorizacionExcepcional.objects.none()
 
+    pendientes, respuesta = _paginar_queryset(
+        pendientes.order_by("-fecha_registro", "-pk"),
+        paginas["pagina_pendientes"],
+        25,
+    )
+    if respuesta:
+        return respuesta
+    historial, respuesta = _paginar_queryset(
+        historial.order_by("-fecha_registro", "-pk"),
+        paginas["pagina_historial"],
+        25,
+    )
+    if respuesta:
+        return respuesta
+    excepciones_pendientes, respuesta = _paginar_queryset(
+        excepciones_pendientes.order_by("-fecha_solicitud", "-pk"),
+        paginas["pagina_excepciones"],
+        25,
+    )
+    if respuesta:
+        return respuesta
+
     return render(
         request,
         "farmacia/recetas_retenidas.html",
@@ -265,7 +443,7 @@ def recetas_retenidas(request):
 @login_required
 @require_http_methods(["POST"])
 def resolver_receta_retenida(request, venta_id):
-    if not (_es_jefe_farmacia(request.user) or _es_auditor_qf(request.user)):
+    if not _es_jefe_farmacia(request.user):
         raise PermissionDenied
 
     respuesta = _validar_payload_formulario(
@@ -275,6 +453,7 @@ def resolver_receta_retenida(request, venta_id):
     if respuesta:
         return respuesta
 
+    venta_id = _validar_pk_ruta(VentaRecetaRetenida, venta_id)
     venta = get_object_or_404(VentaRecetaRetenida, pk=venta_id)
     form = RevisionRecetaForm(request.POST)
     if not form.is_valid():
@@ -282,12 +461,6 @@ def resolver_receta_retenida(request, venta_id):
             error for errors in form.errors.values() for error in errors
         ))
         return redirect("farmacia:recetas_retenidas")
-
-    es_jefe = _es_jefe_farmacia(request.user)
-    if not es_jefe and venta.auditor_qf_id != request.user.pk:
-        raise PermissionDenied
-    if form.cleaned_data["decision"] == "rechazar" and not es_jefe:
-        raise PermissionDenied
 
     try:
         if form.cleaned_data["decision"] == "aprobar":
@@ -315,6 +488,7 @@ def resolver_excepcion_receta(request, autorizacion_id):
     if respuesta:
         return respuesta
 
+    autorizacion_id = _validar_pk_ruta(AutorizacionExcepcional, autorizacion_id)
     autorizacion = get_object_or_404(
         AutorizacionExcepcional,
         pk=autorizacion_id,
@@ -347,6 +521,7 @@ def resolver_excepcion_receta(request, autorizacion_id):
 @require_GET
 @login_required
 def foto_receta_retenida(request, venta_id):
+    venta_id = _validar_pk_ruta(VentaRecetaRetenida, venta_id)
     venta = get_object_or_404(
         VentaRecetaRetenida.objects.select_related("auditor_qf"),
         pk=venta_id,
@@ -384,6 +559,15 @@ def foto_receta_retenida(request, venta_id):
 @login_required
 @require_http_methods(["GET", "POST"])
 def consultas_jefe_farmacia(request):
+    parametros_pagina = ("pagina_pendientes", "pagina_historial")
+    respuesta = _validar_parametros_get(request, set(parametros_pagina))
+    if respuesta:
+        return respuesta
+    paginas = {}
+    for parametro in parametros_pagina:
+        paginas[parametro], respuesta = _numero_pagina(request, parametro)
+        if respuesta:
+            return respuesta
     if not (
         request.user.is_superuser
         or request.user.groups.filter(
@@ -408,10 +592,13 @@ def consultas_jefe_farmacia(request):
             return respuesta
 
         if es_jefe:
-            consulta = get_object_or_404(
+            consulta_id = _parse_primary_key(
                 ConsultaJefeFarmacia,
-                pk=request.POST.get("consulta_id"),
+                request.POST.get("consulta_id"),
             )
+            if consulta_id is None:
+                raise Http404("La consulta solicitada no existe.")
+            consulta = get_object_or_404(ConsultaJefeFarmacia, pk=consulta_id)
             try:
                 consulta.responder(
                     request.user,
@@ -449,12 +636,20 @@ def consultas_jefe_farmacia(request):
         pendientes = ConsultaJefeFarmacia.objects.none()
         historial = consultas.filter(solicitante=request.user)
 
-    pendientes = Paginator(pendientes, 25).get_page(
-        request.GET.get("pagina_pendientes")
+    pendientes, respuesta = _paginar_queryset(
+        pendientes.order_by("-fecha_solicitud", "-pk"),
+        paginas["pagina_pendientes"],
+        25,
     )
-    historial = Paginator(historial, 25).get_page(
-        request.GET.get("pagina_historial")
+    if respuesta:
+        return respuesta
+    historial, respuesta = _paginar_queryset(
+        historial.order_by("-fecha_solicitud", "-pk"),
+        paginas["pagina_historial"],
+        25,
     )
+    if respuesta:
+        return respuesta
     consultas_pendientes = ConsultaJefeFarmacia.objects.filter(
         estado=ConsultaJefeFarmacia.Estado.PENDIENTE
     ).count()
@@ -474,6 +669,7 @@ def consultas_jefe_farmacia(request):
 @require_GET
 @login_required
 def foto_consulta_jefe_farmacia(request, consulta_id):
+    consulta_id = _validar_pk_ruta(ConsultaJefeFarmacia, consulta_id)
     consulta = get_object_or_404(ConsultaJefeFarmacia, pk=consulta_id)
     es_jefe = _es_jefe_farmacia(request.user)
     es_solicitante = (
@@ -535,6 +731,17 @@ def _error_caja(request, message, code="invalid_sale"):
     return redirect("farmacia:caja")
 
 
+def _respuesta_receta_ya_utilizada():
+    return JsonResponse(
+        {
+            "status": "error",
+            "codigo": "RECETA_YA_UTILIZADA",
+            "mensaje": "Esta receta ya fue procesada en otra transacción.",
+        },
+        status=400,
+    )
+
+
 def _parse_primary_key(model, value):
     if isinstance(value, bool):
         return None
@@ -548,6 +755,8 @@ def _parse_primary_key(model, value):
             primary_key = int(value)
         except (TypeError, ValueError, OverflowError):
             return None
+        if value != str(primary_key):
+            return None
     else:
         return None
 
@@ -560,6 +769,13 @@ def _parse_primary_key(model, value):
         return None
     if primary_key > 2**63 - 1:
         return None
+    return primary_key
+
+
+def _validar_pk_ruta(model, value):
+    primary_key = _parse_primary_key(model, value)
+    if primary_key is None:
+        raise Http404
     return primary_key
 
 
@@ -616,7 +832,11 @@ def _registrar_venta_simulada(
     if venta_existente:
         return venta_existente
 
-    if request.session.get("farmacia_caja_checkout_key") != str(clave):
+    clave_sesion = request.session.get("farmacia_caja_checkout_key", "")
+    if not isinstance(clave_sesion, str) or not constant_time_compare(
+        clave_sesion,
+        str(clave),
+    ):
         raise ValidationError("La operación ya no está vigente; revisa la caja e inténtalo otra vez.")
 
     try:
@@ -651,7 +871,11 @@ def _registrar_venta_simulada(
     hoy = timezone.localdate()
     asignaciones = []
     with transaction.atomic():
-        get_user_model().objects.select_for_update().get(pk=request.user.pk)
+        usuario_bloqueado = get_user_model().objects.select_for_update().filter(
+            pk=request.user.pk
+        ).first()
+        if usuario_bloqueado is None:
+            raise PermissionDenied
         venta_existente = VentaCaja.objects.filter(
             idempotency_key=clave,
             cajero=request.user,
@@ -697,8 +921,16 @@ def _registrar_venta_simulada(
             medicamento = medicamentos[medicamento_id]
             receta = recetas[receta_id]
             if (
+                receta.venta_caja_id is not None
+                or receta.estado == VentaRecetaRetenida.Estado.DISPENSADA
+                or receta.detalles_dispensacion.exists()
+            ):
+                raise ValidationError(
+                    "Esta receta ya fue procesada en otra transacción.",
+                    code="RECETA_YA_UTILIZADA",
+                )
+            if (
                 receta.estado != VentaRecetaRetenida.Estado.APROBADA
-                or receta.venta_caja_id is not None
                 or not _revisor_receta_valido(receta)
             ):
                 raise ValidationError(
@@ -738,13 +970,22 @@ def _registrar_venta_simulada(
         for lote in lotes:
             lotes_por_medicamento.setdefault(lote.medicamento_id, []).append(lote)
 
+        recetas_asociadas = set()
         for medicamento_id, cantidad_requerida in cantidades.items():
             medicamento = medicamentos[medicamento_id]
             restante = cantidad_requerida
             for lote in lotes_por_medicamento.get(medicamento_id, []):
                 asignada = min(restante, lote.stock_disponible)
                 if asignada:
-                    asignaciones.append((lote, asignada, medicamento.precio))
+                    receta_id = recetas_por_medicamento.get(medicamento_id)
+                    receta = recetas.get(receta_id)
+                    if receta_id in recetas_asociadas:
+                        receta = None
+                    elif receta is not None:
+                        recetas_asociadas.add(receta_id)
+                    asignaciones.append(
+                        (lote, asignada, medicamento.precio, receta)
+                    )
                     restante -= asignada
                 if restante == 0:
                     break
@@ -759,7 +1000,7 @@ def _registrar_venta_simulada(
             cajero=request.user,
             total=total,
         )
-        for lote, cantidad, precio in asignaciones:
+        for lote, cantidad, precio, receta in asignaciones:
             actualizado = IngresoInventario.objects.filter(
                 pk=lote.pk,
                 stock_disponible__gte=cantidad,
@@ -771,6 +1012,7 @@ def _registrar_venta_simulada(
             DetalleVentaCaja.objects.create(
                 venta=venta,
                 ingreso=lote,
+                receta=receta,
                 cantidad=cantidad,
                 precio_unitario=precio,
             )
@@ -800,9 +1042,29 @@ def _registrar_venta_simulada(
 
 
 @manejar_bloqueo_base_datos
+@limitar_frecuencia_solicitudes("caja")
 @login_required
 @require_http_methods(["GET", "POST"])
 def caja(request):
+    respuesta = _validar_parametros_get(request, {"q", "page"})
+    if respuesta:
+        return respuesta
+    numero_pagina, respuesta = _numero_pagina(request, "page")
+    if respuesta:
+        return respuesta
+    busquedas = request.GET.getlist("q")
+    if len(busquedas) > 1:
+        return HttpResponseBadRequest("La búsqueda debe enviarse una sola vez.")
+    busqueda = (
+        normalizar_texto_seguro(busquedas[0]).strip()
+        if busquedas
+        else ""
+    )
+    if len(busqueda) > 200:
+        return HttpResponseBadRequest(
+            "La búsqueda no puede superar los 200 caracteres."
+        )
+
     if not _es_personal_farmacia(request.user):
         raise PermissionDenied
 
@@ -945,11 +1207,32 @@ def caja(request):
                     checkout_key,
                 )
             except ValidationError as error:
+                if error.code == "RECETA_YA_UTILIZADA":
+                    return _respuesta_receta_ya_utilizada()
                 return _error_caja(
                     request,
                     " ".join(error.messages),
                     "invalid_sale",
                 )
+            except IntegrityError:
+                receta_ids = [
+                    receta_id
+                    for receta_id in (
+                        _parse_primary_key(VentaRecetaRetenida, raw_id)
+                        for raw_id in recetas_carrito.values()
+                    )
+                    if receta_id is not None
+                ]
+                receta_ya_utilizada = VentaRecetaRetenida.objects.filter(
+                    pk__in=receta_ids,
+                ).filter(
+                    Q(venta_caja__isnull=False)
+                    | Q(estado=VentaRecetaRetenida.Estado.DISPENSADA)
+                    | Q(detalles_dispensacion__isnull=False)
+                ).exists()
+                if not receta_ya_utilizada:
+                    raise
+                return _respuesta_receta_ya_utilizada()
 
             request.session["farmacia_caja_carrito"] = {}
             request.session["farmacia_caja_recetas"] = {}
@@ -967,13 +1250,19 @@ def caja(request):
             "invalid_action",
         )
 
-    busqueda = request.GET.get("q", "").strip()
     medicamentos = _medicamentos_con_stock().order_by("nombre")
     if busqueda:
         medicamentos = medicamentos.filter(
             Q(nombre__icontains=busqueda)
             | Q(codigo__icontains=busqueda)
         )
+    pagina_medicamentos, respuesta = _paginar_queryset(
+        medicamentos,
+        numero_pagina,
+        50,
+    )
+    if respuesta:
+        return respuesta
 
     productos_carrito, total_carrito, unidades_carrito = _datos_carrito(carrito)
     for producto in productos_carrito:
@@ -993,7 +1282,8 @@ def caja(request):
         request,
         "farmacia/caja.html",
         {
-            "medicamentos": medicamentos,
+            "medicamentos": pagina_medicamentos,
+            "pagina_medicamentos": pagina_medicamentos,
             "busqueda": busqueda,
             "productos_carrito": productos_carrito,
             "total_carrito": total_carrito,
