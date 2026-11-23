@@ -2,7 +2,7 @@ import logging
 from functools import wraps
 
 from django.db.utils import OperationalError
-from django.http import JsonResponse
+from django.http import HttpResponse, JsonResponse
 from django.shortcuts import render
 
 
@@ -88,6 +88,44 @@ def handler404(request, exception):
             status=404,
         )
     return render(request, "404.html", status=404)
+
+
+def handler400(request, exception):
+    if _solicita_json(request):
+        respuesta = JsonResponse(
+            {
+                "error": "bad_request",
+                "message": "La solicitud no tiene un formato válido.",
+            },
+            status=400,
+        )
+    else:
+        respuesta = HttpResponse(
+            "<!doctype html><title>Solicitud no válida</title>"
+            "<h1>Solicitud no válida</h1>",
+            status=400,
+        )
+    respuesta["Cache-Control"] = "no-store"
+    return respuesta
+
+
+def handler403(request, exception):
+    if _solicita_json(request):
+        respuesta = JsonResponse(
+            {
+                "error": "forbidden",
+                "message": "No tienes permiso para acceder a este recurso.",
+            },
+            status=403,
+        )
+    else:
+        respuesta = HttpResponse(
+            "<!doctype html><title>Acceso denegado</title>"
+            "<h1>Acceso denegado</h1>",
+            status=403,
+        )
+    respuesta["Cache-Control"] = "no-store"
+    return respuesta
 
 
 def handler500(request):

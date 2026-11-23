@@ -138,6 +138,30 @@ SECURE_REFERRER_POLICY = "same-origin"
 SECURE_CROSS_ORIGIN_OPENER_POLICY = "same-origin"
 FARMACIA_RATE_LIMIT_REQUESTS = 15
 FARMACIA_RATE_LIMIT_WINDOW_SECONDS = 60
+redis_cache_url = os.environ.get("DJANGO_REDIS_URL")
+if redis_cache_url and not DEBUG:
+    if not redis_cache_url.startswith(("redis://", "rediss://")):
+        raise ImproperlyConfigured(
+            "DJANGO_REDIS_URL debe usar el esquema redis:// o rediss://."
+        )
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": redis_cache_url,
+            "KEY_PREFIX": "proyectoazure",
+            "OPTIONS": {
+                "socket_connect_timeout": 1,
+                "socket_timeout": 1,
+            },
+        }
+    }
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "proyectoazure-local",
+        }
+    }
 # Django 4.0+ removed SECURE_BROWSER_XSS_FILTER; it is not an active defense.
 RECETA_MAX_IMAGE_PIXELS = 5_000_000
 DATA_UPLOAD_MAX_MEMORY_SIZE = 2_621_440
@@ -169,7 +193,7 @@ DATABASES = {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': BASE_DIR / 'db.sqlite3',
         'OPTIONS': {
-            'timeout': 20,
+            'timeout': 5,
         },
     }
 }

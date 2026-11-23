@@ -2,22 +2,31 @@ from datetime import timedelta
 from decimal import Decimal
 from io import BytesIO
 import json
+from pathlib import Path
+import tempfile
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.conf import settings
-from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.checks import Tags, run_checks
+from django.core.exceptions import (
+    PermissionDenied,
+    SuspiciousOperation,
+    ValidationError,
+)
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError, transaction
+from django.db.backends.sqlite3.base import DatabaseWrapper
 from django.db.utils import OperationalError
 from django.http import QueryDict
 from django.test import Client, RequestFactory, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 from PIL import Image
+from redis.exceptions import RedisError
 
 from farmacia.auth_forms import EmployeeAuthenticationForm
 from farmacia.consulta_forms import ConsultaJefeFarmaciaForm
@@ -90,12 +99,96 @@ class AccesoYFarmaciaTests(TestCase):
         self.assertEqual(settings.FILE_UPLOAD_MAX_MEMORY_SIZE, 2_621_440)
         self.assertEqual(settings.DATA_UPLOAD_MAX_NUMBER_FIELDS, 100)
         self.assertEqual(settings.DATA_UPLOAD_MAX_NUMBER_FILES, 10)
+        self.assertIn(
+            "LocMemCache",
+            settings.CACHES["default"]["BACKEND"],
+        )
         self.assertEqual(
             settings.DATABASES["default"]["OPTIONS"]["timeout"],
-            20,
+            5,
         )
         csrf_cookie = respuesta.cookies[settings.CSRF_COOKIE_NAME]
         self.assertEqual(csrf_cookie["httponly"], True)
+
+    def test_conexiones_sqlite_activan_wal_y_synchronous_full(self):
+        with tempfile.TemporaryDirectory() as directorio_temporal:
+            nombre_base_datos = str(
+                Path(directorio_temporal) / "wal-verificacion.sqlite3"
+            )
+            for indice in range(2):
+                configuracion = settings.DATABASES["default"].copy()
+                configuracion["NAME"] = nombre_base_datos
+                conexion = DatabaseWrapper(
+                    configuracion,
+                    alias=f"wal_verificacion_{indice}",
+                )
+                try:
+                    with conexion.cursor() as cursor:
+                        cursor.execute("PRAGMA journal_mode")
+                        modo_journal = cursor.fetchone()[0].lower()
+                        cursor.execute("PRAGMA synchronous")
+                        nivel_synchronous = cursor.fetchone()[0]
+                finally:
+                    conexion.close()
+
+                self.assertEqual(modo_journal, "wal")
+                self.assertEqual(nivel_synchronous, 2)
+
+    def test_login_falla_cerrado_si_el_cache_compartido_no_responde(self):
+        with patch(
+            "farmacia.views._incrementar_contador_rate_limit",
+            side_effect=RedisError("Redis no disponible"),
+        ), patch("farmacia.views.logger.exception"):
+            respuesta = self.client.post(
+                reverse("login"),
+                {"username": "usuario", "password": "clave"},
+                HTTP_ACCEPT="application/json",
+            )
+
+        self.assertEqual(respuesta.status_code, 503)
+        self.assertEqual(
+            respuesta.json()["codigo"],
+            "LIMITADOR_NO_DISPONIBLE",
+        )
+        self.assertNotIn(b"Redis no disponible", respuesta.content)
+        self.assertNotIn(b"Traceback", respuesta.content)
+
+    def test_manejadores_400_y_403_no_exponen_excepciones(self):
+        from config.error_handlers import handler400, handler403
+
+        for accept in ("application/json", "text/html"):
+            with self.subTest(accept=accept):
+                request = RequestFactory().get(
+                    "/ruta-interna/",
+                    HTTP_ACCEPT=accept,
+                )
+                respuesta_400 = handler400(
+                    request,
+                    SuspiciousOperation("RUTA_INTERNA_PRIVADA"),
+                )
+                respuesta_403 = handler403(
+                    request,
+                    PermissionDenied("DETALLE_PRIVADO"),
+                )
+
+                self.assertEqual(respuesta_400.status_code, 400)
+                self.assertEqual(respuesta_403.status_code, 403)
+                self.assertNotIn(b"RUTA_INTERNA_PRIVADA", respuesta_400.content)
+                self.assertNotIn(b"DETALLE_PRIVADO", respuesta_403.content)
+                self.assertEqual(respuesta_400["Cache-Control"], "no-store")
+                self.assertEqual(respuesta_403["Cache-Control"], "no-store")
+
+    def test_check_deploy_advierte_si_rate_limit_usa_cache_local_en_produccion(self):
+        with override_settings(DEBUG=False):
+            avisos = run_checks(
+                tags=[Tags.security],
+                include_deployment_checks=True,
+            )
+
+        self.assertIn(
+            "farmacia.W001",
+            {aviso.id for aviso in avisos},
+        )
 
     @override_settings(ALLOWED_HOSTS=["localhost", "127.0.0.1", "[::1]"])
     def test_login_rechaza_un_host_que_no_esta_permitido(self):
@@ -176,6 +269,7 @@ class AccesoYFarmaciaTests(TestCase):
             respuesta.json()["codigo"],
             "LIMITE_DE_SOLICITUDES",
         )
+        self.assertNotIn(b"Traceback", respuesta.content)
         self.assertEqual(
             respuesta["Retry-After"],
             str(settings.FARMACIA_RATE_LIMIT_WINDOW_SECONDS),
@@ -202,6 +296,7 @@ class AccesoYFarmaciaTests(TestCase):
             respuesta.json()["codigo"],
             "LIMITE_DE_SOLICITUDES",
         )
+        self.assertNotIn(b"Traceback", respuesta.content)
 
     def test_sesion_tiene_expiracion_de_ocho_horas_y_cookies_protegidas(self):
         self.assertEqual(settings.SESSION_COOKIE_AGE, 28800)

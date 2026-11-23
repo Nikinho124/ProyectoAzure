@@ -1,3 +1,4 @@
+import logging
 import hashlib
 from decimal import Decimal
 from functools import wraps
@@ -30,6 +31,7 @@ from django.utils import timezone
 from django.utils.crypto import constant_time_compare
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_GET, require_http_methods
+from redis.exceptions import RedisError
 
 from config.error_handlers import manejar_bloqueo_base_datos
 from farmacia.auth_forms import EmployeeAuthenticationForm
@@ -53,6 +55,8 @@ from farmacia.receta_forms import (
     RevisionRecetaForm,
     VentaRecetaRetenidaForm,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _incrementar_contador_rate_limit(clave, ventana):
@@ -86,13 +90,36 @@ def limitar_frecuencia_solicitudes(scope, methods=("POST",)):
                 identidades.append(("ip", "unknown"))
 
             excedido = False
-            for tipo, identidad in identidades:
-                digest = hashlib.sha256(
-                    identidad.encode("utf-8")
-                ).hexdigest()
-                clave = f"farmacia:rate:{scope}:{tipo}:{digest}"
-                if _incrementar_contador_rate_limit(clave, ventana) > limite:
-                    excedido = True
+            try:
+                for tipo, identidad in identidades:
+                    digest = hashlib.sha256(
+                        identidad.encode("utf-8")
+                    ).hexdigest()
+                    clave = f"farmacia:rate:{scope}:{tipo}:{digest}"
+                    if _incrementar_contador_rate_limit(clave, ventana) > limite:
+                        excedido = True
+            except RedisError:
+                logger.exception("El caché compartido del rate limit no responde.")
+                datos = {
+                    "status": "error",
+                    "codigo": "LIMITADOR_NO_DISPONIBLE",
+                    "mensaje": (
+                        "El servicio de protección está temporalmente "
+                        "no disponible. Intenta nuevamente."
+                    ),
+                }
+                if "application/json" in request.headers.get("Accept", ""):
+                    respuesta = JsonResponse(datos, status=503)
+                else:
+                    respuesta = HttpResponse(
+                        "<!doctype html><title>Servicio no disponible</title>"
+                        "<h1>Servicio no disponible</h1>"
+                        "<p>Intenta nuevamente en unos segundos.</p>",
+                        status=503,
+                    )
+                respuesta["Retry-After"] = "2"
+                respuesta["Cache-Control"] = "no-store"
+                return respuesta
 
             if excedido:
                 datos = {
