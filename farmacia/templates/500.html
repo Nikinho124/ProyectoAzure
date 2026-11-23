@@ -1,15 +1,23 @@
 <!DOCTYPE html>
+{% load static %}
 <html lang="es">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#123f33">
     <title>Error temporal | FarmaSistem</title>
+    <link rel="stylesheet" href="{% static 'farmacia/sitio.css' %}?v=5">
 </head>
-<body>
-    <main>
-        <h1>No pudimos completar la solicitud</h1>
-        <p>Ocurrió un error inesperado. Inténtalo más tarde.</p>
-        <a href="/">Volver al inicio</a>
+<body class="personal">
+    <main class="pagina-error">
+        <section class="pagina-error-tarjeta" aria-labelledby="error-titulo">
+            <p class="pagina-error-codigo">500 · ERROR TEMPORAL</p>
+            <h1 id="error-titulo">No pudimos completar la solicitud</h1>
+            <p>Ocurrió un error inesperado. Inténtalo más tarde.</p>
+            <a class="pagina-error-accion" href="{% url 'farmacia:inicio' %}">
+                Volver al Panel Principal
+            </a>
+        </section>
     </main>
 </body>
 </html>

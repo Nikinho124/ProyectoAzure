@@ -38,8 +38,12 @@ from django.views.decorators.http import (
 )
 from redis.exceptions import RedisError
 
-from config.error_handlers import manejar_bloqueo_base_datos
-from farmacia.auth_forms import EmployeeAuthenticationForm
+from config.error_handlers import (
+    handler404 as _handler404,
+    handler500 as _handler500,
+    manejar_bloqueo_base_datos,
+)
+from farmacia.auth_forms import BoundedPasswordField, EmployeeAuthenticationForm
 from farmacia.models import (
     GRUPO_FARMACEUTICO,
     GRUPOS_JEFE_FARMACIA,
@@ -55,7 +59,10 @@ from farmacia.models import (
     VentaCaja,
     normalizar_texto_seguro,
 )
-from farmacia.consulta_forms import ConsultaJefeFarmaciaForm
+from farmacia.consulta_forms import (
+    ConsultaJefeFarmaciaForm,
+    ResponderConsultaJefeForm,
+)
 from farmacia.inventario_forms import AjustarStockLoteForm, RevertirMermaForm
 from farmacia.receta_forms import (
     ResolverAutorizacionForm,
@@ -78,6 +85,14 @@ INTENTOS_MAXIMOS_ELIMINAR_CONSULTA = 5
 VENTANA_RATE_LIMIT_ELIMINAR_CONSULTA = 60
 INTENTOS_MAXIMOS_AJUSTE_INVENTARIO = 5
 VENTANA_RATE_LIMIT_AJUSTE_INVENTARIO = 60
+
+
+def error_404_view(request, exception):
+    return _handler404(request, exception)
+
+
+def error_500_view(request):
+    return _handler500(request)
 
 
 def _incrementar_contador_rate_limit(clave, ventana):
@@ -989,6 +1004,12 @@ def consultas_jefe_farmacia(request):
             )
             if respuesta:
                 return respuesta
+            if set(request.POST.keys()).difference(
+                {"consulta_id", "respuesta", "csrfmiddlewaretoken"}
+            ):
+                return HttpResponseBadRequest(
+                    "La solicitud incluye campos no admitidos."
+                )
             consulta_id = _parse_primary_key(
                 ConsultaJefeFarmacia,
                 request.POST.get("consulta_id"),
@@ -996,10 +1017,19 @@ def consultas_jefe_farmacia(request):
             if consulta_id is None:
                 raise Http404("La consulta solicitada no existe.")
             consulta = get_object_or_404(ConsultaJefeFarmacia, pk=consulta_id)
+            form = ResponderConsultaJefeForm(request.POST)
+            if not form.is_valid():
+                errores = [
+                    error
+                    for campo_errores in form.errors.values()
+                    for error in campo_errores
+                ]
+                messages.error(request, " ".join(errores))
+                return redirect("farmacia:consultas_jefe")
             try:
                 consulta.responder(
                     request.user,
-                    request.POST.get("respuesta", ""),
+                    form.cleaned_data["respuesta"],
                 )
             except ValidationError as error:
                 messages.error(request, " ".join(error.messages))
@@ -1132,7 +1162,28 @@ def eliminar_consulta_jefe(request, consulta_id):
 
     consulta_id = _validar_pk_ruta(ConsultaJefeFarmacia, consulta_id)
     consulta = get_object_or_404(ConsultaJefeFarmacia, pk=consulta_id)
-    password_confirmacion = request.POST.get("password_confirmacion", "")
+    respuesta = _validar_payload_formulario(
+        request,
+        ("password_confirmacion",),
+    )
+    if respuesta:
+        return respuesta
+    if set(request.POST.keys()).difference(
+        {"password_confirmacion", "csrfmiddlewaretoken"}
+    ):
+        return HttpResponseBadRequest(
+            "La solicitud incluye campos no admitidos."
+        )
+    try:
+        password_confirmacion = BoundedPasswordField(required=False).clean(
+            request.POST.get("password_confirmacion", "")
+        )
+    except ValidationError:
+        messages.error(
+            request,
+            "La contraseña no es correcta. No se eliminó la consulta.",
+        )
+        return redirect("farmacia:consultas_jefe")
     if not request.user.check_password(password_confirmacion):
         messages.error(
             request,

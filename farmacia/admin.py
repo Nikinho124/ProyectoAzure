@@ -4,7 +4,10 @@ from django.contrib import admin, messages
 from django.contrib.admin.forms import AdminAuthenticationForm
 from django.contrib.auth import get_user_model
 from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
-from django.contrib.auth.forms import UserChangeForm as DjangoUserChangeForm
+from django.contrib.auth.forms import (
+    UserChangeForm as DjangoUserChangeForm,
+    UserCreationForm as DjangoUserCreationForm,
+)
 from django.contrib.auth.models import Group, Permission
 from django import forms
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -21,6 +24,7 @@ from django.utils.html import format_html
 from django.views.decorators.http import require_POST
 
 from config.error_handlers import respuesta_bloqueo_base_datos
+from farmacia.auth_forms import BoundedPasswordField
 from farmacia.models import (
     AutorizacionExcepcional,
     AuditoriaInventario,
@@ -105,6 +109,17 @@ class FarmaUserChangeForm(DjangoUserChangeForm):
         )
 
 
+class FarmaUserCreationForm(DjangoUserCreationForm):
+    password1 = BoundedPasswordField(
+        label="Contraseña",
+        widget=forms.PasswordInput(attrs={"autocomplete": "new-password"}),
+    )
+    password2 = BoundedPasswordField(
+        label="Confirmación de contraseña",
+        widget=forms.PasswordInput(attrs={"autocomplete": "new-password"}),
+    )
+
+
 class AdministracionSoloSuperusuario:
     def has_module_permission(self, request):
         return request.user.is_superuser
@@ -124,6 +139,7 @@ class AdministracionSoloSuperusuario:
 
 class FarmaUserAdmin(AdministracionSoloSuperusuario, DjangoUserAdmin):
     form = FarmaUserChangeForm
+    add_form = FarmaUserCreationForm
     fieldsets = (
         ("Acceso a la cuenta", {"fields": ("username", "password")}),
         ("Información personal", {"fields": ("first_name", "last_name", "email")}),
@@ -187,6 +203,13 @@ def _ingresos_con_stock_disponible():
 
 
 class FarmaAdminAuthenticationForm(AdminAuthenticationForm):
+    password = BoundedPasswordField(
+        label="Contraseña",
+        widget=forms.PasswordInput(
+            attrs={"autocomplete": "current-password"}
+        ),
+    )
+
     def confirm_login_allowed(self, user):
         es_jefe = user.groups.filter(name__in=GRUPOS_JEFE_FARMACIA).exists()
         if not user.is_active or not (user.is_staff or es_jefe):

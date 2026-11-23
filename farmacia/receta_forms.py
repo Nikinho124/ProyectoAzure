@@ -1,10 +1,12 @@
 from io import BytesIO
 from os.path import splitext
+import unicodedata
 from warnings import catch_warnings, simplefilter
 
 from django import forms
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.utils.html import strip_tags
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from farmacia.models import (
@@ -144,6 +146,22 @@ class RecetaImageField(forms.ImageField):
 
 class SanitizedCharField(forms.CharField):
     def to_python(self, value):
+        if isinstance(value, str):
+            normalized = unicodedata.normalize("NFKC", value)
+            if any(
+                char not in "\t\n\r"
+                and unicodedata.category(char) in {"Cc", "Cf", "Cs"}
+                for char in normalized
+            ):
+                raise DjangoValidationError(
+                    "El texto contiene caracteres de control no permitidos.",
+                    code="control_characters",
+                )
+            if strip_tags(normalized) != normalized:
+                raise DjangoValidationError(
+                    "No se permiten etiquetas HTML en este campo.",
+                    code="html_not_allowed",
+                )
         return super().to_python(normalizar_texto_seguro(value))
 
 

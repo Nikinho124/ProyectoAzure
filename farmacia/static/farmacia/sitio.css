@@ -1894,6 +1894,64 @@ textarea:focus-visible {
     gap: 0.8rem;
 }
 
+.formularios-unicos {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.pagina-error {
+    display: grid;
+    min-height: calc(100vh - 2rem);
+    place-items: center;
+    padding: 2rem 1rem;
+}
+
+.pagina-error-tarjeta {
+    width: min(100%, 620px);
+    padding: clamp(1.5rem, 5vw, 3rem);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: var(--paper);
+    box-shadow: var(--shadow-card);
+    text-align: center;
+}
+
+.pagina-error-codigo {
+    margin: 0 0 0.8rem;
+    color: var(--green);
+    font-size: 0.76rem;
+    font-weight: 750;
+    letter-spacing: 0.12em;
+}
+
+.pagina-error-tarjeta h1 {
+    margin: 0;
+    color: var(--forest);
+    font-size: clamp(1.7rem, 5vw, 2.5rem);
+}
+
+.pagina-error-tarjeta > p:not(.pagina-error-codigo) {
+    margin: 0.9rem 0 1.5rem;
+    color: var(--muted);
+    line-height: 1.6;
+}
+
+.pagina-error-accion {
+    display: inline-flex;
+    min-height: 46px;
+    align-items: center;
+    justify-content: center;
+    padding: 0.7rem 1.1rem;
+    border-radius: 7px;
+    color: #fff;
+    background: var(--green);
+    font-weight: 700;
+    text-decoration: none;
+}
+
+.pagina-error-accion:hover {
+    background: var(--green-dark);
+}
+
 .panel-acceso {
     min-width: 0;
     padding: 1rem;

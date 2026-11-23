@@ -14,12 +14,13 @@ Image.MAX_IMAGE_PIXELS = MAX_RECETA_IMAGE_PIXELS
 class ConsultaJefeFarmaciaForm(forms.ModelForm):
     asunto = SanitizedCharField(
         label="Asunto",
-        max_length=160,
+        max_length=100,
+        widget=forms.TextInput(attrs={"maxlength": "100"}),
     )
     pregunta = SanitizedCharField(
         label="Consulta",
-        max_length=5000,
-        widget=forms.Textarea(attrs={"rows": 5, "maxlength": "5000"}),
+        max_length=500,
+        widget=forms.Textarea(attrs={"rows": 5, "maxlength": "500"}),
     )
     foto_receta = RecetaImageField(
         label="Foto de la receta",
@@ -52,3 +53,11 @@ class ConsultaJefeFarmaciaForm(forms.ModelForm):
         extension = {"JPEG": "jpg", "PNG": "png"}[foto.image.format]
         foto.name = f"receta.{extension}"
         return foto
+
+
+class ResponderConsultaJefeForm(forms.Form):
+    respuesta = SanitizedCharField(
+        label="Respuesta",
+        max_length=5000,
+        widget=forms.Textarea(attrs={"maxlength": "5000"}),
+    )

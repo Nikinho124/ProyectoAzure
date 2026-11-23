@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group, Permission
+from django.contrib.auth.tokens import default_token_generator
 from django.contrib.contenttypes.models import ContentType
 from django.conf import settings
 from django.core.checks import Tags, run_checks
@@ -17,15 +18,17 @@ from django.core.exceptions import (
     ValidationError,
 )
 from django.core.cache import cache
+from django.core import mail
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError, transaction
 from django.db.backends.sqlite3.base import DatabaseWrapper
 from django.db.models.deletion import ProtectedError
 from django.db.utils import OperationalError
-from django.http import QueryDict
 from django.test import Client, RequestFactory, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.encoding import force_bytes
+from django.utils.http import urlsafe_base64_encode
 from PIL import Image
 from redis.exceptions import RedisError
 
@@ -430,7 +433,9 @@ class AccesoYFarmaciaTests(TestCase):
 
     def test_campos_de_texto_y_decision_rechazan_payloads_masivos(self):
         with self.assertRaises(ValidationError):
-            ConsultaJefeFarmaciaForm.base_fields["pregunta"].clean("x" * 5001)
+            ConsultaJefeFarmaciaForm.base_fields["asunto"].clean("x" * 101)
+        with self.assertRaises(ValidationError):
+            ConsultaJefeFarmaciaForm.base_fields["pregunta"].clean("x" * 501)
         with self.assertRaises(ValidationError):
             VentaRecetaRetenidaForm.base_fields["motivo_excepcion"].clean(
                 "x" * 2001
@@ -439,6 +444,106 @@ class AccesoYFarmaciaTests(TestCase):
             RevisionRecetaForm.base_fields["decision"].clean(
                 "aprobar" + "x" * 10000
             )
+
+    def test_passwords_limitan_longitud_y_rechazan_caracteres_de_control(self):
+        from farmacia.admin import FarmaUserCreationForm
+        from farmacia.auth_forms import BoundedSetPasswordForm
+        from farmacia.inventario_forms import (
+            AjustarStockLoteForm,
+            RevertirMermaForm,
+        )
+        from farmacia.admin import FarmaAdminAuthenticationForm
+
+        password_fields = (
+            EmployeeAuthenticationForm().fields["password"],
+            FarmaAdminAuthenticationForm().fields["password"],
+            AjustarStockLoteForm().fields["password_confirmacion"],
+            RevertirMermaForm().fields["password_confirmacion"],
+            FarmaUserCreationForm().fields["password1"],
+            FarmaUserCreationForm().fields["password2"],
+            BoundedSetPasswordForm(user=self.admin).fields["new_password1"],
+            BoundedSetPasswordForm(user=self.admin).fields["new_password2"],
+        )
+        for field in password_fields:
+            with self.subTest(field=field.label):
+                self.assertEqual(field.max_length, 20)
+                self.assertEqual(field.widget.attrs["maxlength"], "20")
+                with self.assertRaises(ValidationError):
+                    field.clean("x" * 21)
+                with self.assertRaises(ValidationError):
+                    field.clean("valid\x00password")
+
+    def test_consulta_limita_caracteres_y_rechaza_html_y_controles(self):
+        formulario = ConsultaJefeFarmaciaForm()
+
+        self.assertEqual(formulario.fields["asunto"].max_length, 100)
+        self.assertEqual(formulario.fields["pregunta"].max_length, 500)
+        self.assertIn('maxlength="100"', str(formulario["asunto"]))
+        self.assertIn('maxlength="500"', str(formulario["pregunta"]))
+        with self.assertRaises(ValidationError):
+            formulario.fields["pregunta"].clean("<script>alert(1)</script>")
+        with self.assertRaises(ValidationError):
+            formulario.fields["asunto"].clean("texto\x00inválido")
+
+    def test_password_largo_o_html_en_respuesta_no_se_guarda(self):
+        jefe = self.crear_jefe("jefe_texto_consulta_endurecido")
+        quimico = self.crear_quimico("quimico_texto_consulta_endurecido")
+        consulta = ConsultaJefeFarmacia.objects.create(
+            solicitante=quimico,
+            asunto="Consulta válida",
+            pregunta="Pregunta válida",
+        )
+        self.client.force_login(jefe)
+
+        respuesta = self.client.post(
+            reverse("farmacia:consultas_jefe"),
+            {
+                "consulta_id": consulta.pk,
+                "respuesta": "<script>alert(1)</script>",
+            },
+            follow=True,
+        )
+
+        self.assertContains(respuesta, "No se permiten etiquetas HTML")
+        consulta.refresh_from_db()
+        self.assertEqual(consulta.estado, ConsultaJefeFarmacia.Estado.PENDIENTE)
+        self.assertEqual(consulta.respuesta, "")
+
+    def test_eliminar_consulta_rechaza_password_mayor_a_20_caracteres(self):
+        jefe = self.crear_jefe("jefe_password_largo_eliminacion")
+        quimico = self.crear_quimico("quimico_password_largo_eliminacion")
+        consulta = ConsultaJefeFarmacia.objects.create(
+            solicitante=quimico,
+            asunto="Consulta válida",
+            pregunta="Pregunta válida",
+        )
+        self.client.force_login(jefe)
+
+        respuesta = self.client.post(
+            reverse("farmacia:eliminar_consulta_jefe", args=(consulta.pk,)),
+            {"password_confirmacion": "x" * 21},
+            follow=True,
+        )
+
+        self.assertContains(respuesta, "La contraseña no es correcta.")
+        self.assertTrue(
+            ConsultaJefeFarmacia.objects.filter(pk=consulta.pk).exists()
+        )
+
+    def test_formularios_de_usuario_admin_limitan_password_a_20(self):
+        from farmacia.admin import FarmaUserCreationForm
+
+        formulario = FarmaUserCreationForm(
+            data={
+                "username": "usuario_nuevo_limitado",
+                "password1": "x" * 21,
+                "password2": "x" * 21,
+            }
+        )
+
+        self.assertFalse(formulario.is_valid())
+        self.assertIn("password1", formulario.errors)
+        self.assertIn("password2", formulario.errors)
 
     def test_formularios_no_exponen_campos_de_rol_o_estado_interno(self):
         from farmacia.admin import FarmaGroupChangeForm, FarmaUserChangeForm
@@ -547,7 +652,7 @@ class AccesoYFarmaciaTests(TestCase):
         self.assertFalse(usuario.groups.exists())
 
     def test_usuario_staff_sin_rol_farmaceutico_no_puede_iniciar_sesion(self):
-        usuario = User.objects.create_user(
+        User.objects.create_user(
             username="staff_sin_rol",
             password="Staff-password-123",
             is_staff=True,
@@ -1748,7 +1853,7 @@ class AccesoYFarmaciaTests(TestCase):
                 )
             )
 
-    def test_formulario_normaliza_rut_con_nul_y_unicode_y_nombre_de_medicamento(self):
+    def test_formulario_normaliza_unicode_y_rechaza_caracteres_de_control(self):
         from farmacia.receta_forms import VentaRecetaRetenidaForm
 
         quimico = self.crear_quimico("auditor_unicode_rut")
@@ -1761,10 +1866,10 @@ class AccesoYFarmaciaTests(TestCase):
 
         form = VentaRecetaRetenidaForm(
             data={
-                "cliente_rut": "１１１１\u200b１１１１-\x001",
+                "cliente_rut": "１１１１１１１１-1",
                 "medicamento": medicamento.pk,
                 "cantidad": "1",
-                "medico_prescriptor": " Dra.\x00\u200b Ejemplo ",
+                "medico_prescriptor": " Dra. Ejemplo ",
                 "motivo_excepcion": " Justificación%00 válida ",
             },
             files={"foto_receta": self.crear_imagen_receta()},
@@ -1777,6 +1882,19 @@ class AccesoYFarmaciaTests(TestCase):
             form.cleaned_data["motivo_excepcion"],
             "Justificación válida",
         )
+        formulario_con_controles = VentaRecetaRetenidaForm(
+            data={
+                "cliente_rut": "11111111-\x001",
+                "medicamento": medicamento.pk,
+                "cantidad": "1",
+                "medico_prescriptor": "Dr.\u200b Ejemplo",
+            },
+            files={"foto_receta": self.crear_imagen_receta()},
+        )
+        self.assertFalse(formulario_con_controles.is_valid())
+        self.assertIn("cliente_rut", formulario_con_controles.errors)
+        self.assertIn("medico_prescriptor", formulario_con_controles.errors)
+
         formulario_solo_espacios = VentaRecetaRetenidaForm(
             data={
                 "cliente_rut": "11111111-1",
@@ -3052,6 +3170,23 @@ class AccesoYFarmaciaTests(TestCase):
             "La ruta solicitada no existe.",
         )
 
+    def test_ruta_inexistente_renderiza_404_amigable_sin_traceback(self):
+        with override_settings(DEBUG=False):
+            respuesta = self.client.get("/ruta-html-no-existe/")
+
+        self.assertEqual(respuesta.status_code, 404)
+        self.assertContains(
+            respuesta,
+            "La dirección ingresada no existe o no está disponible.",
+            status_code=404,
+        )
+        self.assertContains(
+            respuesta,
+            "Volver al Panel Principal",
+            status_code=404,
+        )
+        self.assertNotContains(respuesta, "Traceback", status_code=404)
+
     def test_vistas_de_recetas_y_consultas_devuelven_404_para_ids_inexistentes(self):
         jefe = self.crear_jefe("jefe_ids_inexistentes")
         self.client.force_login(jefe)
@@ -3121,6 +3256,11 @@ class AccesoYFarmaciaTests(TestCase):
         )
         self.assertNotIn(b"TRACE_SENTINEL", respuesta.content)
         self.assertEqual(respuesta_html.status_code, 500)
+        self.assertContains(
+            respuesta_html,
+            "Volver al Panel Principal",
+            status_code=500,
+        )
         self.assertNotIn(b"TRACE_SENTINEL", respuesta_html.content)
 
     def test_stock_calcula_ingresos_menos_mermas_y_limita_merma(self):
@@ -3324,7 +3464,7 @@ class AccesoYFarmaciaTests(TestCase):
                 timezone.localdate() + timedelta(days=120)
             ).isoformat(),
             "motivo": "Se corrige el conteo del ingreso.",
-            "password_confirmacion": "Contraseña-incorrecta",
+            "password_confirmacion": "Clave-erronea",
         }
 
         respuesta = self.client.post(
@@ -3503,7 +3643,7 @@ class AccesoYFarmaciaTests(TestCase):
             reverse("farmacia:revertir_merma", args=(merma.pk,)),
             {
                 "motivo": "La merma se registró por error.",
-                "password_confirmacion": "Contraseña-incorrecta",
+                "password_confirmacion": "Clave-erronea",
             },
         )
         self.assertEqual(respuesta.status_code, 400)
@@ -3583,7 +3723,7 @@ class AccesoYFarmaciaTests(TestCase):
                 timezone.localdate() + timedelta(days=90)
             ).isoformat(),
             "motivo": "Intento de ajuste con contraseña incorrecta.",
-            "password_confirmacion": "Contraseña-incorrecta",
+            "password_confirmacion": "Clave-erronea",
         }
 
         for intento in range(1, 6):
@@ -3701,3 +3841,69 @@ class AccesoYFarmaciaTests(TestCase):
             reverse("admin:farmacia_ingresoinventario_changelist"),
         )
         self.assertContains(respuesta, "Gesti&oacute;n de Inventario")
+
+    @override_settings(
+        EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    )
+    def test_password_reset_envia_correo_html_y_texto_con_enlace_valido(self):
+        usuario = User.objects.create_user(
+            username="usuario_password_reset",
+            email="reset@example.com",
+            password="Original-password-123",
+            is_active=True,
+        )
+
+        respuesta = self.client.post(
+            reverse("farmacia:password_reset"),
+            {"email": usuario.email},
+        )
+
+        self.assertRedirects(
+            respuesta,
+            reverse("farmacia:password_reset_done"),
+        )
+        self.assertEqual(len(mail.outbox), 1)
+        correo = mail.outbox[0]
+        self.assertEqual(correo.from_email, "no-reply@farmasistem.local")
+        self.assertEqual(len(correo.alternatives), 1)
+        html = correo.alternatives[0][0]
+        uid = urlsafe_base64_encode(force_bytes(usuario.pk))
+        token = default_token_generator.make_token(usuario)
+        enlace = reverse(
+            "farmacia:password_reset_confirm",
+            kwargs={"uidb64": uid, "token": token},
+        )
+        self.assertIn(enlace, correo.body)
+        self.assertIn(enlace, html)
+
+        confirmacion = self.client.get(enlace, follow=True)
+        self.assertEqual(confirmacion.status_code, 200)
+        self.assertContains(confirmacion, "csrfmiddlewaretoken")
+        guardado = self.client.post(
+            confirmacion.redirect_chain[-1][0],
+            {
+                "new_password1": "Nueva-segura-456!",
+                "new_password2": "Nueva-segura-456!",
+            },
+        )
+        self.assertRedirects(
+            guardado,
+            reverse("farmacia:password_reset_complete"),
+        )
+        usuario.refresh_from_db()
+        self.assertTrue(usuario.check_password("Nueva-segura-456!"))
+
+    @override_settings(
+        EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    )
+    def test_password_reset_no_revela_si_el_correo_no_existe(self):
+        respuesta = self.client.post(
+            reverse("farmacia:password_reset"),
+            {"email": "no-existe@example.com"},
+        )
+
+        self.assertRedirects(
+            respuesta,
+            reverse("farmacia:password_reset_done"),
+        )
+        self.assertEqual(len(mail.outbox), 0)

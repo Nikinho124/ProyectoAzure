@@ -573,7 +573,7 @@
                                <form method="post" action="{% url 'farmacia:eliminar_consulta_jefe' consulta.pk %}">
                                    {% csrf_token %}
                                    <label for="password-pendiente-{{ consulta.pk }}">Confirma tu contraseña</label>
-                                   <input id="password-pendiente-{{ consulta.pk }}" type="password" name="password_confirmacion" autocomplete="current-password" required>
+                                   <input id="password-pendiente-{{ consulta.pk }}" type="password" name="password_confirmacion" maxlength="20" autocomplete="current-password" required>
                                    <button class="consulta-boton-eliminar" type="submit">Confirmar eliminación</button>
                                </form>
                             </details>
@@ -628,7 +628,7 @@
                                <form method="post" action="{% url 'farmacia:eliminar_consulta_jefe' consulta.pk %}">
                                    {% csrf_token %}
                                    <label for="password-historial-{{ consulta.pk }}">Confirma tu contraseña</label>
-                                   <input id="password-historial-{{ consulta.pk }}" type="password" name="password_confirmacion" autocomplete="current-password" required>
+                                   <input id="password-historial-{{ consulta.pk }}" type="password" name="password_confirmacion" maxlength="20" autocomplete="current-password" required>
                                    <button class="consulta-boton-eliminar" type="submit">Confirmar eliminación</button>
                                </form>
                            </details>

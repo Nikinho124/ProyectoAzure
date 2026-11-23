@@ -1,6 +1,8 @@
 from django import forms
 
+from farmacia.auth_forms import BoundedPasswordField
 from farmacia.models import MAX_MOTIVO_AJUSTE_LENGTH, MAX_POSITIVE_INTEGER
+from farmacia.receta_forms import SanitizedCharField
 
 
 class AjustarStockLoteForm(forms.Form):
@@ -14,30 +16,28 @@ class AjustarStockLoteForm(forms.Form):
         label="Fecha de vencimiento",
         widget=forms.DateInput(attrs={"type": "date"}),
     )
-    motivo = forms.CharField(
+    motivo = SanitizedCharField(
         label="Motivo del ajuste",
         max_length=1800,
         strip=True,
-        widget=forms.Textarea(attrs={"rows": 4}),
+        widget=forms.Textarea(attrs={"rows": 4, "maxlength": "1800"}),
     )
-    password_confirmacion = forms.CharField(
+    password_confirmacion = BoundedPasswordField(
         label="Contraseña de confirmación",
-        max_length=256,
-        strip=False,
         widget=forms.PasswordInput(attrs={"autocomplete": "current-password"}),
     )
 
 
 class RevertirMermaForm(forms.Form):
-    motivo = forms.CharField(
+    motivo = SanitizedCharField(
         label="Motivo de la reversión",
         max_length=MAX_MOTIVO_AJUSTE_LENGTH,
         strip=True,
-        widget=forms.Textarea(attrs={"rows": 4}),
+        widget=forms.Textarea(
+            attrs={"rows": 4, "maxlength": str(MAX_MOTIVO_AJUSTE_LENGTH)}
+        ),
     )
-    password_confirmacion = forms.CharField(
+    password_confirmacion = BoundedPasswordField(
         label="Contraseña de confirmación",
-        max_length=256,
-        strip=False,
         widget=forms.PasswordInput(attrs={"autocomplete": "current-password"}),
     )

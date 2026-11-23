@@ -1401,8 +1401,8 @@ class ConsultaJefeFarmacia(SanitizaTextoMixin, models.Model):
         related_name="consultas_jefe_farmacia",
         verbose_name="Químico farmacéutico",
     )
-    asunto = models.CharField("Asunto", max_length=160)
-    pregunta = models.TextField("Consulta")
+    asunto = models.CharField("Asunto", max_length=100)
+    pregunta = models.TextField("Consulta", max_length=500)
     foto_receta = models.ImageField(
         "Foto de la receta",
         upload_to=consulta_receta_upload_to,

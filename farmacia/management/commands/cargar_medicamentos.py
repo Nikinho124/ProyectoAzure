@@ -39,7 +39,7 @@ class Command(BaseCommand):
         actualizados = 0
 
         for codigo, nombre, descripcion, precio, requiere_receta, stock_minimo in medicamentos:
-            medicamento, creado = Medicamento.objects.update_or_create(
+            _, creado = Medicamento.objects.update_or_create(
                 codigo=codigo,
                 defaults={
                     "nombre": nombre,
