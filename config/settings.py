@@ -74,6 +74,11 @@ else:
         "Configura DJANGO_ALLOWED_HOSTS con los dominios permitidos."
     )
 
+if not DEBUG:
+    ALLOWED_HOSTS = list(
+        dict.fromkeys(("127.0.0.1", "localhost", *ALLOWED_HOSTS))
+    )
+
 
 # Application definition
 

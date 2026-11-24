@@ -18,6 +18,7 @@
             <a href="{% url 'login' %}">Iniciar sesión</a>
         </nav>
     </header>
+    {% block main_content %}
     <main class="acceso-layout">
         <aside class="acceso-presentacion">
             <div class="acceso-mensaje">
@@ -47,6 +48,7 @@
             </div>
         </div>
     </main>
+    {% endblock %}
     {% include "farmacia/includes/pie_pagina.html" %}
 </body>
 </html>

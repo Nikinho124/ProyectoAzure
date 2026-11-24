@@ -2,6 +2,7 @@ from datetime import timedelta
 from decimal import Decimal
 from io import BytesIO
 import json
+import os
 from pathlib import Path
 import tempfile
 from unittest.mock import patch
@@ -122,6 +123,12 @@ class AccesoYFarmaciaTests(TestCase):
         )
         csrf_cookie = respuesta.cookies[settings.CSRF_COOKIE_NAME]
         self.assertEqual(csrf_cookie["httponly"], True)
+
+    def test_debug_env_false_se_interpreta_como_booleano_false(self):
+        from config.settings import _environment_bool
+
+        with patch.dict(os.environ, {"TEST_DJANGO_DEBUG": "False"}):
+            self.assertFalse(_environment_bool("TEST_DJANGO_DEBUG", True))
 
     def test_pbkdf2_prioritario_usa_mas_iteraciones_y_verifica_hashes_anteriores(self):
         nuevo_hash = make_password("Clave-segura-123")
@@ -3288,7 +3295,12 @@ class AccesoYFarmaciaTests(TestCase):
         self.assertEqual(respuesta.status_code, 404)
         self.assertContains(
             respuesta,
-            "La dirección ingresada no existe o no está disponible.",
+            "Error 404 - Página no encontrada",
+            status_code=404,
+        )
+        self.assertContains(
+            respuesta,
+            'aria-label="Navegación principal"',
             status_code=404,
         )
         self.assertContains(
@@ -3369,7 +3381,17 @@ class AccesoYFarmaciaTests(TestCase):
         self.assertEqual(respuesta_html.status_code, 500)
         self.assertContains(
             respuesta_html,
+            "Error 500 - Error interno del servidor",
+            status_code=500,
+        )
+        self.assertContains(
+            respuesta_html,
             "Volver al Panel Principal",
+            status_code=500,
+        )
+        self.assertContains(
+            respuesta_html,
+            'aria-label="Navegación principal"',
             status_code=500,
         )
         self.assertNotIn(b"TRACE_SENTINEL", respuesta_html.content)

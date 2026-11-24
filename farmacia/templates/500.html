@@ -1,16 +1,16 @@
-{% extends "farmacia/base_personal.html" %}
+{% extends "base.html" %}
 
-{% block title %}Error temporal{% endblock %}
+{% block title %}Error 500 - Error interno del servidor{% endblock %}
 
-{% block content %}
-    <section class="pagina-error">
-        <div class="pagina-error-tarjeta" aria-labelledby="error-titulo">
-            <p class="pagina-error-codigo">500 · ERROR TEMPORAL</p>
-            <h1 id="error-titulo">No pudimos completar la solicitud</h1>
-            <p>Ocurrió un error inesperado. Inténtalo más tarde.</p>
+{% block main_content %}
+    <main class="pagina-error">
+        <section class="pagina-error-tarjeta" aria-labelledby="error-titulo">
+            <p class="pagina-error-codigo">ERROR 500</p>
+            <h1 id="error-titulo">Error 500 - Error interno del servidor</h1>
+            <p>No pudimos completar la solicitud. Inténtalo más tarde.</p>
             <a class="pagina-error-accion" href="{% url 'farmacia:inicio' %}">
                 Volver al Panel Principal
             </a>
-        </div>
-    </section>
+        </section>
+    </main>
 {% endblock %}
