@@ -1,8 +1,8 @@
 from django.contrib.auth import views as auth_views
 from django.urls import path, reverse_lazy
 
-from farmacia.auth_forms import BoundedSetPasswordForm
 from farmacia.views import (
+    ConfirmarRestablecimientoContrasenaView,
     caja,
     ajustar_stock_lote,
     consultas_jefe_farmacia,
@@ -41,9 +41,8 @@ urlpatterns = [
     ),
     path(
         "password-reset/confirm/<uidb64>/<token>/",
-        auth_views.PasswordResetConfirmView.as_view(
+        ConfirmarRestablecimientoContrasenaView.as_view(
             template_name="registration/password_reset_confirm.html",
-            form_class=BoundedSetPasswordForm,
             success_url=reverse_lazy("farmacia:password_reset_complete"),
         ),
         name="password_reset_confirm",

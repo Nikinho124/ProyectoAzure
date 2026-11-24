@@ -136,8 +136,15 @@ SECURE_REFERRER_POLICY = "same-origin"
 SECURE_CROSS_ORIGIN_OPENER_POLICY = "same-origin"
 FARMACIA_RATE_LIMIT_REQUESTS = 15
 FARMACIA_RATE_LIMIT_WINDOW_SECONDS = 60
+FARMACIA_LOGIN_MAX_FAILED_ATTEMPTS = 5
+FARMACIA_LOGIN_LOCKOUT_SECONDS = 900
 redis_cache_url = os.environ.get("DJANGO_REDIS_URL")
-if redis_cache_url and not DEBUG:
+if not DEBUG and not redis_cache_url:
+    raise ImproperlyConfigured(
+        "DJANGO_REDIS_URL es obligatorio cuando DJANGO_DEBUG=False "
+        "para usar una caché compartida."
+    )
+if not DEBUG:
     if not redis_cache_url.startswith(("redis://", "rediss://")):
         raise ImproperlyConfigured(
             "DJANGO_REDIS_URL debe usar el esquema redis:// o rediss://."
@@ -213,6 +220,14 @@ AUTH_PASSWORD_VALIDATORS = [
     {
         'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
     },
+]
+
+PASSWORD_HASHERS = [
+    "farmacia.hashers.FarmaciaPBKDF2PasswordHasher",
+    "django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher",
+    "django.contrib.auth.hashers.Argon2PasswordHasher",
+    "django.contrib.auth.hashers.BCryptSHA256PasswordHasher",
+    "django.contrib.auth.hashers.ScryptPasswordHasher",
 ]
 
 

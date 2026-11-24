@@ -10,7 +10,7 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
-from django.contrib.auth.views import LoginView
+from django.contrib.auth.views import LoginView, PasswordResetConfirmView
 from django.core.cache import cache
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, connection, transaction
@@ -43,7 +43,11 @@ from config.error_handlers import (
     handler500 as _handler500,
     manejar_bloqueo_base_datos,
 )
-from farmacia.auth_forms import BoundedPasswordField, EmployeeAuthenticationForm
+from farmacia.auth_forms import (
+    BoundedPasswordField,
+    BoundedSetPasswordForm,
+    EmployeeAuthenticationForm,
+)
 from farmacia.models import (
     GRUPO_FARMACEUTICO,
     GRUPOS_JEFE_FARMACIA,
@@ -85,6 +89,12 @@ INTENTOS_MAXIMOS_ELIMINAR_CONSULTA = 5
 VENTANA_RATE_LIMIT_ELIMINAR_CONSULTA = 60
 INTENTOS_MAXIMOS_AJUSTE_INVENTARIO = 5
 VENTANA_RATE_LIMIT_AJUSTE_INVENTARIO = 60
+MENSAJE_BLOQUEO_LOGIN = (
+    "Has superado el límite de 5 intentos fallidos. Tu cuenta ha sido "
+    "bloqueada por 15 minutos. Si no recuerdas tu contraseña, puedes "
+    "restablecerla con el enlace enviado a tu correo o desde la opción "
+    "de recuperación."
+)
 
 
 def error_404_view(request, exception):
@@ -297,6 +307,74 @@ class IniciarSesionView(LoginView):
     authentication_form = EmployeeAuthenticationForm
     redirect_authenticated_user = True
 
+    def _username_para_bloqueo(self):
+        username = self.request.POST.get("username", "")
+        field = self.get_form_class().base_fields.get("username")
+        max_length = getattr(field, "max_length", None) or 150
+        if not username or len(username) > max_length:
+            return ""
+        if field is not None:
+            username = field.to_python(username)
+        return username
+
+    def _clave_intentos_fallidos(self, username):
+        return f"failed_login_{username}"
+
+    def _respuesta_login_bloqueado(self):
+        messages.error(self.request, MENSAJE_BLOQUEO_LOGIN)
+        respuesta = self.render_to_response(
+            self.get_context_data(form=self.get_form()),
+            status=429,
+        )
+        respuesta["Retry-After"] = str(settings.FARMACIA_LOGIN_LOCKOUT_SECONDS)
+        respuesta["Cache-Control"] = "no-store"
+        return respuesta
+
+    def post(self, request, *args, **kwargs):
+        self.request = request
+        username = self._username_para_bloqueo()
+        if username:
+            try:
+                intentos = cache.get(
+                    self._clave_intentos_fallidos(username),
+                    0,
+                )
+            except RedisError:
+                logger.exception("El caché del bloqueo de inicio de sesión no responde.")
+                return _respuesta_cache_solicitudes_no_disponible()
+            if intentos >= settings.FARMACIA_LOGIN_MAX_FAILED_ATTEMPTS:
+                return self._respuesta_login_bloqueado()
+        return super().post(request, *args, **kwargs)
+
+    def form_invalid(self, form):
+        username = form.cleaned_data.get("username") or self._username_para_bloqueo()
+        if username:
+            try:
+                intentos = _incrementar_contador_rate_limit(
+                    self._clave_intentos_fallidos(username),
+                    settings.FARMACIA_LOGIN_LOCKOUT_SECONDS,
+                )
+            except RedisError:
+                logger.exception(
+                    "El caché del bloqueo de inicio de sesión no responde."
+                )
+                return _respuesta_cache_solicitudes_no_disponible()
+            if intentos >= settings.FARMACIA_LOGIN_MAX_FAILED_ATTEMPTS:
+                return self._respuesta_login_bloqueado()
+        return super().form_invalid(form)
+
+    def form_valid(self, form):
+        username = form.cleaned_data.get("username")
+        if username:
+            try:
+                cache.delete(self._clave_intentos_fallidos(username))
+            except RedisError:
+                logger.exception(
+                    "No se pudo limpiar el contador de intentos del inicio de sesión."
+                )
+                return _respuesta_cache_solicitudes_no_disponible()
+        return super().form_valid(form)
+
     def get_success_url(self):
         redirect_to = self.request.POST.get("next") or self.request.GET.get("next")
         if redirect_to:
@@ -312,6 +390,22 @@ class IniciarSesionView(LoginView):
         if self.request.user.is_staff:
             return reverse("admin:index")
         return reverse("farmacia:inicio")
+
+
+class ConfirmarRestablecimientoContrasenaView(PasswordResetConfirmView):
+    form_class = BoundedSetPasswordForm
+
+    def form_valid(self, form):
+        try:
+            cache.delete(
+                f"failed_login_{form.user.get_username()}"
+            )
+        except RedisError:
+            logger.exception(
+                "No se pudo limpiar el bloqueo tras restablecer la contraseña."
+            )
+            return _respuesta_cache_solicitudes_no_disponible()
+        return super().form_valid(form)
 
 
 def _es_personal_farmacia(user):

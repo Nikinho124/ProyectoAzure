@@ -9,6 +9,12 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group, Permission
 from django.contrib.auth.tokens import default_token_generator
+from django.contrib.auth.hashers import (
+    PBKDF2PasswordHasher,
+    check_password,
+    identify_hasher,
+    make_password,
+)
 from django.contrib.contenttypes.models import ContentType
 from django.conf import settings
 from django.core.checks import Tags, run_checks
@@ -117,6 +123,22 @@ class AccesoYFarmaciaTests(TestCase):
         csrf_cookie = respuesta.cookies[settings.CSRF_COOKIE_NAME]
         self.assertEqual(csrf_cookie["httponly"], True)
 
+    def test_pbkdf2_prioritario_usa_mas_iteraciones_y_verifica_hashes_anteriores(self):
+        nuevo_hash = make_password("Clave-segura-123")
+        hasher = identify_hasher(nuevo_hash)
+        hash_anterior = PBKDF2PasswordHasher().encode(
+            "Clave-anterior-123",
+            "sal-de-prueba",
+        )
+
+        self.assertEqual(
+            settings.PASSWORD_HASHERS[0],
+            "farmacia.hashers.FarmaciaPBKDF2PasswordHasher",
+        )
+        self.assertEqual(hasher.iterations, 1_200_000)
+        self.assertTrue(check_password("Clave-segura-123", nuevo_hash))
+        self.assertTrue(check_password("Clave-anterior-123", hash_anterior))
+
     def test_conexiones_sqlite_activan_wal_y_synchronous_full(self):
         with tempfile.TemporaryDirectory() as directorio_temporal:
             nombre_base_datos = str(
@@ -207,6 +229,8 @@ class AccesoYFarmaciaTests(TestCase):
         self.assertEqual(respuesta.status_code, 400)
 
     def test_login_cambia_el_id_de_sesion_al_autenticar(self):
+        clave_intentos = f"failed_login_{self.admin.username}"
+        cache.set(clave_intentos, 3, timeout=900)
         session = self.client.session
         session["dato_anonimo"] = "valor previo al login"
         session.save()
@@ -228,6 +252,69 @@ class AccesoYFarmaciaTests(TestCase):
         self.assertNotEqual(
             self.client.cookies[settings.SESSION_COOKIE_NAME].value,
             session_key_anterior,
+        )
+        self.assertIsNone(cache.get(clave_intentos))
+
+    def test_login_bloquea_despues_de_cinco_intentos_por_usuario(self):
+        login_url = reverse("login")
+        for intento in range(settings.FARMACIA_LOGIN_MAX_FAILED_ATTEMPTS):
+            respuesta = self.client.post(
+                login_url,
+                {
+                    "username": self.admin.username,
+                    "password": f"Clave-incorrecta-{intento}",
+                },
+            )
+            if intento < settings.FARMACIA_LOGIN_MAX_FAILED_ATTEMPTS - 1:
+                self.assertEqual(respuesta.status_code, 200)
+            else:
+                self.assertEqual(respuesta.status_code, 429)
+                self.assertContains(
+                    respuesta,
+                    "Has superado el límite de 5 intentos fallidos.",
+                    status_code=429,
+                )
+                self.assertEqual(
+                    respuesta["Retry-After"],
+                    str(settings.FARMACIA_LOGIN_LOCKOUT_SECONDS),
+                )
+
+        respuesta = self.client.post(
+            login_url,
+            {
+                "username": self.admin.username,
+                "password": "Admin-password-123",
+            },
+        )
+
+        self.assertEqual(respuesta.status_code, 429)
+        self.assertNotIn("_auth_user_id", self.client.session)
+        self.assertEqual(
+            cache.get(f"failed_login_{self.admin.username}"),
+            settings.FARMACIA_LOGIN_MAX_FAILED_ATTEMPTS,
+        )
+
+    def test_login_no_permite_evitar_bloqueo_agregando_espacios_al_usuario(self):
+        clave_intentos = f"failed_login_{self.admin.username}"
+        cache.set(
+            clave_intentos,
+            settings.FARMACIA_LOGIN_MAX_FAILED_ATTEMPTS,
+            timeout=settings.FARMACIA_LOGIN_LOCKOUT_SECONDS,
+        )
+
+        respuesta = self.client.post(
+            reverse("login"),
+            {
+                "username": f"{self.admin.username}   ",
+                "password": "Admin-password-123",
+            },
+        )
+
+        self.assertEqual(respuesta.status_code, 429)
+        self.assertNotIn("_auth_user_id", self.client.session)
+        self.assertEqual(
+            cache.get(clave_intentos),
+            settings.FARMACIA_LOGIN_MAX_FAILED_ATTEMPTS,
         )
 
     def test_login_usa_el_mismo_mensaje_para_credenciales_invalidas(self):
@@ -259,7 +346,7 @@ class AccesoYFarmaciaTests(TestCase):
             respuesta = self.client.post(
                 login_url,
                 {
-                    "username": "usuario_inexistente",
+                    "username": f"usuario_inexistente_{intento}",
                     "password": f"Clave-invalida-{intento}",
                 },
                 HTTP_ACCEPT="application/json",
@@ -268,7 +355,10 @@ class AccesoYFarmaciaTests(TestCase):
 
         respuesta = self.client.post(
             login_url,
-            {"username": "usuario_inexistente", "password": "Clave-invalida"},
+            {
+                "username": "usuario_inexistente_final",
+                "password": "Clave-invalida",
+            },
             HTTP_ACCEPT="application/json",
         )
         self.assertEqual(respuesta.status_code, 429)
@@ -3879,6 +3969,12 @@ class AccesoYFarmaciaTests(TestCase):
         confirmacion = self.client.get(enlace, follow=True)
         self.assertEqual(confirmacion.status_code, 200)
         self.assertContains(confirmacion, "csrfmiddlewaretoken")
+        clave_intentos = f"failed_login_{usuario.username}"
+        cache.set(
+            clave_intentos,
+            settings.FARMACIA_LOGIN_MAX_FAILED_ATTEMPTS,
+            timeout=settings.FARMACIA_LOGIN_LOCKOUT_SECONDS,
+        )
         guardado = self.client.post(
             confirmacion.redirect_chain[-1][0],
             {
@@ -3892,6 +3988,7 @@ class AccesoYFarmaciaTests(TestCase):
         )
         usuario.refresh_from_db()
         self.assertTrue(usuario.check_password("Nueva-segura-456!"))
+        self.assertIsNone(cache.get(clave_intentos))
 
     @override_settings(
         EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
