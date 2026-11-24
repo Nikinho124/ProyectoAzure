@@ -5,7 +5,7 @@
 {% block main_content %}
     <main class="pagina-error">
         <section class="pagina-error-tarjeta" aria-labelledby="error-titulo">
-            <p class="pagina-error-codigo">ERROR 500</p>
+            <p class="pagina-error-codigo pagina-error-codigo-grande" aria-hidden="true">500</p>
             <h1 id="error-titulo">Error 500 - Error interno del servidor</h1>
             <p>No pudimos completar la solicitud. Inténtalo más tarde.</p>
             <a class="pagina-error-accion" href="{% url 'farmacia:inicio' %}">

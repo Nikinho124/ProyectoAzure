@@ -3295,7 +3295,13 @@ class AccesoYFarmaciaTests(TestCase):
         self.assertEqual(respuesta.status_code, 404)
         self.assertContains(
             respuesta,
-            "Error 404 - Página no encontrada",
+            "Página desconocida",
+            status_code=404,
+        )
+        self.assertNotContains(respuesta, "Error 404", status_code=404)
+        self.assertContains(
+            respuesta,
+            "No encontramos una página disponible",
             status_code=404,
         )
         self.assertContains(

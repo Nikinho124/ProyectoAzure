@@ -1923,6 +1923,13 @@ textarea:focus-visible {
     letter-spacing: 0.12em;
 }
 
+.pagina-error-codigo-grande {
+    margin-bottom: 0.35rem;
+    font-size: clamp(4rem, 16vw, 7rem);
+    letter-spacing: -0.07em;
+    line-height: 1;
+}
+
 .pagina-error-codigo-denegado {
     color: #a32135;
 }

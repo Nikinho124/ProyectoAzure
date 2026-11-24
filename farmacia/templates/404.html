@@ -1,13 +1,12 @@
 {% extends "base.html" %}
 
-{% block title %}Error 404 - Página no encontrada{% endblock %}
+{% block title %}Página desconocida{% endblock %}
 
 {% block main_content %}
     <main class="pagina-error">
         <section class="pagina-error-tarjeta" aria-labelledby="error-titulo">
-            <p class="pagina-error-codigo">ERROR 404</p>
-            <h1 id="error-titulo">Error 404 - Página no encontrada</h1>
-            <p>La dirección solicitada no existe o ya no está disponible. Verifica la URL o vuelve al panel principal.</p>
+            <h1 id="error-titulo">Página desconocida</h1>
+            <p>No encontramos una página disponible en esa dirección. Comprueba la URL o vuelve al panel principal.</p>
             <a class="pagina-error-accion" href="{% url 'farmacia:inicio' %}">
                 Volver al Panel Principal
             </a>

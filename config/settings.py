@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
-load_dotenv(BASE_DIR / ".env")
+load_dotenv(BASE_DIR / ".env", override=True)
 
 
 def _environment_bool(name, default):
@@ -37,6 +37,10 @@ def _environment_bool(name, default):
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
+DJANGO_ENVIRONMENT = os.environ.get(
+    "DJANGO_ENVIRONMENT",
+    "production",
+).strip().lower()
 DEBUG = _environment_bool("DJANGO_DEBUG", False)
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY")
 if not SECRET_KEY:
@@ -53,6 +57,7 @@ if not DEBUG and (
     )
 
 hosts_value = os.environ.get("DJANGO_ALLOWED_HOSTS")
+hosts_configurados = None
 if hosts_value:
     ALLOWED_HOSTS = [
         host.strip()
@@ -67,12 +72,21 @@ if hosts_value:
         raise ImproperlyConfigured(
             "DJANGO_ALLOWED_HOSTS no puede incluir el comodín '*'."
         )
-elif DEBUG:
-    ALLOWED_HOSTS = ["localhost", "127.0.0.1", "[::1]"]
+    hosts_configurados = ALLOWED_HOSTS
+elif DEBUG or DJANGO_ENVIRONMENT == "development":
+    ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
+    hosts_configurados = ALLOWED_HOSTS
 else:
     raise ImproperlyConfigured(
         "Configura DJANGO_ALLOWED_HOSTS con los dominios permitidos."
     )
+
+HOSTS_LOCALES = {"127.0.0.1", "localhost"}
+DESARROLLO_LOCAL = (
+    DJANGO_ENVIRONMENT == "development"
+    and bool(hosts_configurados)
+    and set(hosts_configurados).issubset(HOSTS_LOCALES)
+)
 
 if not DEBUG:
     ALLOWED_HOSTS = list(
@@ -128,14 +142,14 @@ LOGOUT_REDIRECT_URL = '/'
 
 SECURE_SSL_REDIRECT = _environment_bool(
     "DJANGO_SECURE_SSL_REDIRECT",
-    not DEBUG,
+    not DEBUG and not DESARROLLO_LOCAL,
 )
-SESSION_COOKIE_SECURE = not DEBUG
+SESSION_COOKIE_SECURE = not DEBUG and not DESARROLLO_LOCAL
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Lax"
 SESSION_EXPIRE_AT_BROWSER_CLOSE = True
 SESSION_COOKIE_AGE = 28800
-CSRF_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG and not DESARROLLO_LOCAL
 CSRF_COOKIE_HTTPONLY = True
 CSRF_COOKIE_SAMESITE = "Lax"
 X_FRAME_OPTIONS = "DENY"
@@ -147,12 +161,12 @@ FARMACIA_RATE_LIMIT_WINDOW_SECONDS = 60
 FARMACIA_LOGIN_MAX_FAILED_ATTEMPTS = 5
 FARMACIA_LOGIN_LOCKOUT_SECONDS = 900
 redis_cache_url = os.environ.get("DJANGO_REDIS_URL")
-if not DEBUG and not redis_cache_url:
+if not DEBUG and not DESARROLLO_LOCAL and not redis_cache_url:
     raise ImproperlyConfigured(
         "DJANGO_REDIS_URL es obligatorio cuando DJANGO_DEBUG=False "
         "para usar una caché compartida."
     )
-if not DEBUG:
+if not DEBUG and not DESARROLLO_LOCAL:
     if not redis_cache_url.startswith(("redis://", "rediss://")):
         raise ImproperlyConfigured(
             "DJANGO_REDIS_URL debe usar el esquema redis:// o rediss://."
@@ -254,7 +268,7 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.1/howto/static-files/
 
-STATIC_URL = 'static/'
+STATIC_URL = '/static/'
 
 
 # Email
