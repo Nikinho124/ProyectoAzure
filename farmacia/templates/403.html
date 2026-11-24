@@ -1,0 +1,21 @@
+{% extends "farmacia/base_personal.html" %}
+
+{% block title %}Acceso denegado{% endblock %}
+
+{% block content %}
+    <section class="pagina-error">
+        <div class="pagina-error-tarjeta" aria-labelledby="error-titulo">
+            <p class="pagina-error-codigo pagina-error-codigo-denegado">
+                Error 403 - Acceso Denegado
+            </p>
+            <h1 id="error-titulo">Acceso restringido</h1>
+            <p>
+                No posees los permisos necesarios o tu rol actual no cuenta
+                con la autorización requerida para acceder a este módulo de farmacia.
+            </p>
+            <a class="pagina-error-accion" href="{% url 'farmacia:inicio' %}">
+                Volver al Panel Principal
+            </a>
+        </div>
+    </section>
+{% endblock %}

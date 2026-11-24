@@ -119,11 +119,7 @@ def handler403(request, exception):
             status=403,
         )
     else:
-        respuesta = HttpResponse(
-            "<!doctype html><title>Acceso denegado</title>"
-            "<h1>Acceso denegado</h1>",
-            status=403,
-        )
+        respuesta = render(request, "403.html", status=403)
     respuesta["Cache-Control"] = "no-store"
     return respuesta
 

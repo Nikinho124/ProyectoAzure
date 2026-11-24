@@ -1923,6 +1923,10 @@ textarea:focus-visible {
     letter-spacing: 0.12em;
 }
 
+.pagina-error-codigo-denegado {
+    color: #a32135;
+}
+
 .pagina-error-tarjeta h1 {
     margin: 0;
     color: var(--forest);

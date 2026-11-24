@@ -6,15 +6,20 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#123f33">
     <title>{% block title %}Recuperar contraseña{% endblock %} | FarmaSistem</title>
-    <link rel="stylesheet" href="{% static 'farmacia/sitio.css' %}?v=4">
+    <link rel="stylesheet" href="{% static 'farmacia/sitio.css' %}?v=5">
 </head>
 <body class="pantalla-acceso">
+    <header class="barra">
+        <a class="marca" href="{% url 'login' %}" aria-label="FarmaSistem, inicio de sesión">
+            <span class="marca-icono" aria-hidden="true">F</span>
+            <span class="marca-texto">Farma<span>Sistem</span><small>GESTIÓN FARMACÉUTICA</small></span>
+        </a>
+        <nav class="nav-enlaces" aria-label="Navegación principal">
+            <a href="{% url 'login' %}">Iniciar sesión</a>
+        </nav>
+    </header>
     <main class="acceso-layout">
         <aside class="acceso-presentacion">
-            <a class="marca-acceso" href="{% url 'login' %}" aria-label="FarmaSistem, inicio de sesión">
-                <span class="marca-icono" aria-hidden="true">F</span>
-                <span>FarmaSistem</span>
-            </a>
             <div class="acceso-mensaje">
                 <p class="acceso-eyebrow">GESTI&Oacute;N FARMAC&Eacute;UTICA</p>
                 <h1>Recupera el acceso a tu cuenta.</h1>

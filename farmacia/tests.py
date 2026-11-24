@@ -184,6 +184,7 @@ class AccesoYFarmaciaTests(TestCase):
 
     def test_manejadores_400_y_403_no_exponen_excepciones(self):
         from config.error_handlers import handler400, handler403
+        from django.contrib.messages.storage.fallback import FallbackStorage
 
         for accept in ("application/json", "text/html"):
             with self.subTest(accept=accept):
@@ -191,6 +192,10 @@ class AccesoYFarmaciaTests(TestCase):
                     "/ruta-interna/",
                     HTTP_ACCEPT=accept,
                 )
+                request.user = self.admin
+                request.session = self.client.session
+                request.resolver_match = None
+                request._messages = FallbackStorage(request)
                 respuesta_400 = handler400(
                     request,
                     SuspiciousOperation("RUTA_INTERNA_PRIVADA"),
@@ -206,6 +211,22 @@ class AccesoYFarmaciaTests(TestCase):
                 self.assertNotIn(b"DETALLE_PRIVADO", respuesta_403.content)
                 self.assertEqual(respuesta_400["Cache-Control"], "no-store")
                 self.assertEqual(respuesta_403["Cache-Control"], "no-store")
+                if accept == "text/html":
+                    self.assertContains(
+                        respuesta_403,
+                        "Error 403",
+                        status_code=403,
+                    )
+                    self.assertContains(
+                        respuesta_403,
+                        "No posees los permisos necesarios",
+                        status_code=403,
+                    )
+                    self.assertContains(
+                        respuesta_403,
+                        "Volver al Panel Principal",
+                        status_code=403,
+                    )
 
     def test_check_deploy_advierte_si_rate_limit_usa_cache_local_en_produccion(self):
         with override_settings(DEBUG=False):
@@ -3963,8 +3984,9 @@ class AccesoYFarmaciaTests(TestCase):
             "farmacia:password_reset_confirm",
             kwargs={"uidb64": uid, "token": token},
         )
-        self.assertIn(enlace, correo.body)
-        self.assertIn(enlace, html)
+        enlace_absoluto = f"http://testserver{enlace}"
+        self.assertIn(enlace_absoluto, correo.body)
+        self.assertIn(enlace_absoluto, html)
 
         confirmacion = self.client.get(enlace, follow=True)
         self.assertEqual(confirmacion.status_code, 200)
@@ -3990,6 +4012,28 @@ class AccesoYFarmaciaTests(TestCase):
         self.assertTrue(usuario.check_password("Nueva-segura-456!"))
         self.assertIsNone(cache.get(clave_intentos))
 
+    def test_password_reset_paginas_comparten_base_y_navegacion_publica(self):
+        uid = urlsafe_base64_encode(force_bytes(self.admin.pk))
+        rutas = (
+            reverse("farmacia:password_reset"),
+            reverse("farmacia:password_reset_done"),
+            reverse(
+                "farmacia:password_reset_confirm",
+                kwargs={"uidb64": uid, "token": "token-invalido"},
+            ),
+            reverse("farmacia:password_reset_complete"),
+        )
+
+        for ruta in rutas:
+            with self.subTest(ruta=ruta):
+                respuesta = self.client.get(ruta)
+                self.assertEqual(respuesta.status_code, 200)
+                self.assertContains(
+                    respuesta,
+                    'aria-label="Navegación principal"',
+                )
+                self.assertContains(respuesta, "Iniciar sesión")
+
     @override_settings(
         EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
     )
@@ -4004,3 +4048,60 @@ class AccesoYFarmaciaTests(TestCase):
             reverse("farmacia:password_reset_done"),
         )
         self.assertEqual(len(mail.outbox), 0)
+
+    @override_settings(
+        EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+        ALLOWED_HOSTS=["testserver"],
+    )
+    def test_password_reset_rechaza_host_no_permitido(self):
+        usuario = User.objects.create_user(
+            username="usuario_host_reset",
+            email="host-reset@example.com",
+            password="Original-password-123",
+            is_active=True,
+        )
+
+        respuesta = self.client.post(
+            reverse("farmacia:password_reset"),
+            {"email": usuario.email},
+            HTTP_HOST="host-no-autorizado.invalid",
+        )
+
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertEqual(len(mail.outbox), 0)
+
+    @override_settings(
+        EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+        PASSWORD_RESET_TIMEOUT=1,
+    )
+    def test_password_reset_rechaza_token_expirado(self):
+        usuario = User.objects.create_user(
+            username="usuario_token_expirado",
+            email="token-expirado@example.com",
+            password="Original-password-123",
+            is_active=True,
+        )
+        instante_token = default_token_generator._now()
+        with patch.object(
+            default_token_generator,
+            "_now",
+            return_value=instante_token,
+        ):
+            token = default_token_generator.make_token(usuario)
+        uid = urlsafe_base64_encode(force_bytes(usuario.pk))
+        enlace = reverse(
+            "farmacia:password_reset_confirm",
+            kwargs={"uidb64": uid, "token": token},
+        )
+
+        with patch.object(
+            default_token_generator,
+            "_now",
+            return_value=instante_token + timedelta(seconds=2),
+        ):
+            respuesta = self.client.get(enlace)
+
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertContains(respuesta, "Este enlace no es válido o ya fue utilizado.")
+        usuario.refresh_from_db()
+        self.assertTrue(usuario.check_password("Original-password-123"))

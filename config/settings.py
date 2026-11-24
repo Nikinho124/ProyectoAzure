@@ -11,12 +11,15 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
 import os
+import warnings
 from pathlib import Path
 
 from django.core.exceptions import ImproperlyConfigured
+from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")
 
 
 def _environment_bool(name, default):
@@ -259,3 +262,11 @@ EMAIL_HOST_USER = os.getenv("MAILTRAP_USER", "")
 EMAIL_HOST_PASSWORD = os.getenv("MAILTRAP_PASSWORD", "")
 EMAIL_USE_TLS = True
 DEFAULT_FROM_EMAIL = 'no-reply@farmasistem.local'
+if not EMAIL_HOST_USER.strip() or not EMAIL_HOST_PASSWORD.strip():
+    warnings.warn(
+        "Faltan MAILTRAP_USER o MAILTRAP_PASSWORD; el envío SMTP de "
+        "restablecimiento de contraseña no funcionará hasta configurar "
+        "ambas variables en .env o en el entorno.",
+        RuntimeWarning,
+        stacklevel=2,
+    )
