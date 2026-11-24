@@ -10,7 +10,11 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
-from django.contrib.auth.views import LoginView, PasswordResetConfirmView
+from django.contrib.auth.views import (
+    LoginView,
+    PasswordResetConfirmView,
+    PasswordResetView,
+)
 from django.core.cache import cache
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, connection, transaction
@@ -47,6 +51,7 @@ from farmacia.auth_forms import (
     BoundedPasswordField,
     BoundedSetPasswordForm,
     EmployeeAuthenticationForm,
+    FarmaciaPasswordResetForm,
 )
 from farmacia.models import (
     GRUPO_FARMACEUTICO,
@@ -89,6 +94,8 @@ INTENTOS_MAXIMOS_ELIMINAR_CONSULTA = 5
 VENTANA_RATE_LIMIT_ELIMINAR_CONSULTA = 60
 INTENTOS_MAXIMOS_AJUSTE_INVENTARIO = 5
 VENTANA_RATE_LIMIT_AJUSTE_INVENTARIO = 60
+INTENTOS_MAXIMOS_PASSWORD_RESET = 3
+VENTANA_RATE_LIMIT_PASSWORD_RESET = 15 * 60
 MENSAJE_BLOQUEO_LOGIN = (
     "Has superado el límite de 5 intentos fallidos. Tu cuenta ha sido "
     "bloqueada por 15 minutos. Si no recuerdas tu contraseña, puedes "
@@ -129,6 +136,8 @@ def limitar_frecuencia_solicitudes(scope, methods=("POST",)):
             ip = request.META.get("REMOTE_ADDR")
             if ip:
                 identidades.append(("ip", ip))
+            else:
+                identidades.append(("ip", "unknown"))
             session_key = request.session.session_key
             if session_key:
                 identidades.append(("session", session_key))
@@ -206,6 +215,60 @@ def _respuesta_cache_solicitudes_no_disponible():
     respuesta["Retry-After"] = "2"
     respuesta["Cache-Control"] = "no-store"
     return respuesta
+
+
+class FarmaciaPasswordResetView(PasswordResetView):
+    form_class = FarmaciaPasswordResetForm
+
+    def post(self, request, *args, **kwargs):
+        identidades = []
+        ip = request.META.get("REMOTE_ADDR")
+        if ip:
+            identidades.append(("ip", ip))
+
+        email = request.POST.get("email", "").strip().casefold()
+        if email and len(email) <= 100:
+            identidades.append(("email", email))
+
+        excedido = False
+        try:
+            for tipo, identidad in identidades:
+                digest = hashlib.sha256(
+                    identidad.encode("utf-8")
+                ).hexdigest()
+                clave = f"farmacia:rate:password-reset:{tipo}:{digest}"
+                intentos = _incrementar_contador_rate_limit(
+                    clave,
+                    VENTANA_RATE_LIMIT_PASSWORD_RESET,
+                )
+                excedido = excedido or (
+                    intentos > INTENTOS_MAXIMOS_PASSWORD_RESET
+                )
+        except RedisError:
+            logger.exception(
+                "El caché del límite de restablecimiento no responde."
+            )
+            return _respuesta_cache_solicitudes_no_disponible()
+
+        if excedido:
+            respuesta = HttpResponse(
+                "<!doctype html><title>Demasiadas solicitudes</title>"
+                "<h1>Demasiadas solicitudes</h1>"
+                "<p>Espera 15 minutos antes de volver a solicitar "
+                "un restablecimiento.</p>",
+                status=429,
+            )
+            respuesta["Retry-After"] = str(
+                VENTANA_RATE_LIMIT_PASSWORD_RESET
+            )
+            respuesta["Cache-Control"] = "no-store"
+            return respuesta
+
+        return super().post(request, *args, **kwargs)
+
+    def form_invalid(self, form):
+        # Invalid addresses get the same neutral response as unknown users.
+        return redirect(self.get_success_url())
 
 
 def _bloquear_solicitud_si_corresponde(

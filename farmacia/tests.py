@@ -3994,7 +3994,7 @@ class AccesoYFarmaciaTests(TestCase):
 
         respuesta = self.client.post(
             reverse("farmacia:password_reset"),
-            {"email": usuario.email},
+            {"email": f"  {usuario.email}  "},
         )
 
         self.assertRedirects(
@@ -4007,13 +4007,11 @@ class AccesoYFarmaciaTests(TestCase):
         self.assertEqual(len(correo.alternatives), 1)
         html = correo.alternatives[0][0]
         uid = urlsafe_base64_encode(force_bytes(usuario.pk))
-        token = default_token_generator.make_token(usuario)
-        enlace = reverse(
-            "farmacia:password_reset_confirm",
-            kwargs={"uidb64": uid, "token": token},
+        enlace = correo.body.split("http://testserver", 1)[1].split()[0]
+        self.assertTrue(
+            enlace.startswith(f"/farmacia/password-reset/confirm/{uid}/")
         )
         enlace_absoluto = f"http://testserver{enlace}"
-        self.assertIn(enlace_absoluto, correo.body)
         self.assertIn(enlace_absoluto, html)
 
         confirmacion = self.client.get(enlace, follow=True)
@@ -4076,6 +4074,89 @@ class AccesoYFarmaciaTests(TestCase):
             reverse("farmacia:password_reset_done"),
         )
         self.assertEqual(len(mail.outbox), 0)
+
+    @override_settings(
+        EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    )
+    def test_password_reset_invalido_muestra_respuesta_neutral_sin_correo(self):
+        for email in ("no-es-un-correo", "a" * 101 + "@example.com"):
+            with self.subTest(email=email[:20]):
+                respuesta = self.client.post(
+                    reverse("farmacia:password_reset"),
+                    {"email": email},
+                )
+
+                self.assertRedirects(
+                    respuesta,
+                    reverse("farmacia:password_reset_done"),
+                )
+        self.assertEqual(len(mail.outbox), 0)
+
+    @override_settings(
+        EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    )
+    def test_password_reset_omite_cuentas_inactivas(self):
+        User.objects.create_user(
+            username="usuario_inactivo_reset",
+            email="inactivo-reset@example.com",
+            password="Original-password-123",
+            is_active=False,
+        )
+
+        respuesta = self.client.post(
+            reverse("farmacia:password_reset"),
+            {"email": "inactivo-reset@example.com"},
+        )
+
+        self.assertRedirects(
+            respuesta,
+            reverse("farmacia:password_reset_done"),
+        )
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_password_reset_limita_por_ip_y_correo_durante_15_minutos(self):
+        url = reverse("farmacia:password_reset")
+        correo = "limite-reset@example.com"
+
+        for _ in range(3):
+            respuesta = self.client.post(url, {"email": correo})
+            self.assertRedirects(
+                respuesta,
+                reverse("farmacia:password_reset_done"),
+            )
+        excedida = self.client.post(url, {"email": correo})
+        self.assertEqual(excedida.status_code, 429)
+        self.assertEqual(excedida["Retry-After"], "900")
+
+        cache.clear()
+        for ip in ("192.0.2.1", "192.0.2.2", "192.0.2.3"):
+            respuesta = self.client.post(
+                url,
+                {"email": correo},
+                REMOTE_ADDR=ip,
+            )
+            self.assertRedirects(
+                respuesta,
+                reverse("farmacia:password_reset_done"),
+            )
+        excedida = self.client.post(
+            url,
+            {"email": correo},
+            REMOTE_ADDR="192.0.2.4",
+        )
+        self.assertEqual(excedida.status_code, 429)
+
+    def test_password_reset_falla_cerrado_si_cache_no_disponible(self):
+        with patch(
+            "farmacia.views.cache.add",
+            side_effect=RedisError("cache unavailable"),
+        ):
+            respuesta = self.client.post(
+                reverse("farmacia:password_reset"),
+                {"email": "cache-reset@example.com"},
+            )
+
+        self.assertEqual(respuesta.status_code, 503)
 
     @override_settings(
         EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",

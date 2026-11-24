@@ -3,6 +3,7 @@ from django.urls import path, reverse_lazy
 
 from farmacia.views import (
     ConfirmarRestablecimientoContrasenaView,
+    FarmaciaPasswordResetView,
     caja,
     ajustar_stock_lote,
     consultas_jefe_farmacia,
@@ -23,7 +24,7 @@ urlpatterns = [
     path("caja/", caja, name="caja"),
     path(
         "password-reset/",
-        auth_views.PasswordResetView.as_view(
+        FarmaciaPasswordResetView.as_view(
             template_name="registration/password_reset_form.html",
             email_template_name="registration/password_reset_email.txt",
             html_email_template_name="registration/password_reset_email.html",

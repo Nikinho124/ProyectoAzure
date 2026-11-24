@@ -1,10 +1,26 @@
 import unicodedata
 
 from django import forms
-from django.contrib.auth.forms import AuthenticationForm, SetPasswordForm
+from django.contrib.auth.forms import (
+    AuthenticationForm,
+    PasswordResetForm,
+    SetPasswordForm,
+)
 from django.core.exceptions import ValidationError
 
 from farmacia.models import GRUPO_FARMACEUTICO, GRUPOS_JEFE_FARMACIA
+
+
+class FarmaciaPasswordResetForm(PasswordResetForm):
+    email = forms.EmailField(
+        max_length=100,
+        widget=forms.EmailInput(
+            attrs={"autocomplete": "email", "maxlength": "100"}
+        ),
+    )
+
+    def clean_email(self):
+        return self.cleaned_data["email"].strip()
 
 
 class BoundedPasswordField(forms.CharField):
